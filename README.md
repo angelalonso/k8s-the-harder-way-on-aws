@@ -53,7 +53,9 @@ aws --profile=test-k8s ec2 create-tags --resources rtb-afb0e9c9 --tags Key=Name,
 ```
 aws --profile=test-k8s ec2 associate-route-table --route-table-id rtb-afb0e9c9 --subnet-id subnet-4ce1072a
 aws --profile=test-k8s ec2 associate-route-table --route-table-id rtb-afb0e9c9 --subnet-id subnet-e5e50383
+aws --profile=test-k8s ec2 create-route --route-table-id rtb-afb0e9c9 --destination-cidr-block 0.0.0.0/0 --gateway-id igw-eba4228c
 ```
+, where igw-eba4228c is the internet gateway id you received from the related step
 
 ### Create and config Security Groups and rules
 ```
@@ -86,3 +88,6 @@ aws --profile=test-k8s ec2 create-tags --resources i-0526417e4384cc4cc --tags Ke
 - Compare to original setup on GCE
 - Create all the machines and have them configured as per the original
 - Correct any leftovers
+
+# Cleanup
+- Review if IGW is still needed, as well as SSL access
