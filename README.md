@@ -62,12 +62,27 @@ aws --profile=test-k8s ec2 create-security-group --vpc-id vpc-674e9b01 --group-n
 aws --profile=test-k8s ec2 create-tags --resources sg-727dc908 --tags Key=Name,Value=afonseca-k8s-sg-masters
 aws --profile=test-k8s ec2 create-tags --resources sg-757eca0f --tags Key=Name,Value=afonseca-k8s-sg-workers
 
-aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-757eca0f --port 0-65535 --protocol tcp --source-group sg-727dc908
 aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-727dc908 --port 0-65535 --protocol tcp --source-group sg-757eca0f
+aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-727dc908 --port 22 --protocol tcp --cidr 01.02.03.04/32
+aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-757eca0f --port 0-65535 --protocol tcp --source-group sg-727dc908
+aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-757eca0f --port 22 --protocol tcp --cidr 01.02.03.04/32
 ```
-, where sg-727dc908 and sg-757eca0f are the security group IDs we got from the two first commands, respectively
+, where sg-727dc908 and sg-757eca0f are the security group IDs we got from the two first commands, respectively, and 01.02.03.04 is your local IP address (http://www.whatsmyip.org/)
+
+### Provision the machines
+```
+aws --profile=test-k8s ec2 create-key-pair --key-name afonseca-k8s-key
+```
+, and copy the contents of KeyMAterial into ~/.ssh/afonseca-k8s-key.priv
+
+```
+aws --profile=test-k8s ec2 run-instances --image-id ami-835b4efa --instance-type t2.small --key-name afonseca-k8s-key --security-group-ids sg-727dc908 --subnet-id subnet-4ce1072a --associate-public-ip-address
+aws --profile=test-k8s ec2 create-tags --resources i-0526417e4384cc4cc --tags Key=Name,Value=afonseca-k8s-master01
+```
+
 
 # Next
+- Add 0.0.0.0/0 target the igw on the route table
 - Compare to original setup on GCE
-- Create the machines and have them configured as per the original
+- Create all the machines and have them configured as per the original
 - Correct any leftovers
