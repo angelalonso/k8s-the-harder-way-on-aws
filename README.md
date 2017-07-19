@@ -9,6 +9,22 @@ https://github.com/kelseyhightower/kubernetes-the-hard-way but in AWS
 - You have awscli setup. In my case 'pip install awscli --upgrade --user' did the trick
 
 ## Cloud provisioning
+Built on top of https://github.com/rmenn/kubernetes-the-hard-way-aws/blob/master/docs/01-infra.md
 Based on https://github.com/kelseyhightower/kubernetes-the-hard-way/blob/master/docs/01-infrastructure-gcp.md
 
-aws --profile
+### Create and tag the VPC
+```
+aws --profile=test-k8s ec2 create-vpc --cidr-block 10.4.0.0/16
+```
+Take the vpc id from the output, then:
+```
+aws --profile=test-k8s ec2 create-tags --resources vpc-674e9b01 --tags Key=Name,Value=afonseca-k8s-vpc
+```
+, where vpc-674e9b01 s the vpc ID I got from the previous step and afonseca-k8s is my project name
+
+### Enable DNS for the VPC
+```
+aws --profile=test-k8s ec2 modify-vpc-attribute --vpc-id vpc-674e9b01 --enable-dns-support
+aws --profile=test-k8s ec2 modify-vpc-attribute --vpc-id vpc-674e9b01 --enable-dns-hostnames
+```
+
