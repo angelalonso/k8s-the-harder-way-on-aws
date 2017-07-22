@@ -75,12 +75,14 @@ aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-757eca
 ```
 aws --profile=test-k8s ec2 create-key-pair --key-name afonseca-k8s-key
 ```
-, and copy the contents of KeyMAterial into ~/.ssh/afonseca-k8s-key.priv
+, and copy the contents of KeyMaterial into ~/.ssh/afonseca-k8s-key.priv
 
+Now do the following six times, creating three masters (afonseca-k8s-master01-3) and three workers (afonseca-k8s-worker01-3):
 ```
 aws --profile=test-k8s ec2 run-instances --image-id ami-835b4efa --instance-type t2.small --key-name afonseca-k8s-key --security-group-ids sg-727dc908 --subnet-id subnet-4ce1072a --associate-public-ip-address
 aws --profile=test-k8s ec2 create-tags --resources i-0526417e4384cc4cc --tags Key=Name,Value=afonseca-k8s-master01
 ```
+, where i-0526417e4384cc4cc is the InstanceID you get from the previous step.
 
 
 # Next
