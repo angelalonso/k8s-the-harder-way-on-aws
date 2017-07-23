@@ -84,12 +84,152 @@ aws --profile=test-k8s ec2 create-tags --resources i-0526417e4384cc4cc --tags Ke
 ```
 , where i-0526417e4384cc4cc is the InstanceID you get from the previous step.
 
+## Setup CA and create TLS certs
+
+### Install CFSSL
+
+```
+wget https://pkg.cfssl.org/R1.2/cfssl_linux-amd64
+chmod +x cfssl_linux-amd64
+sudo mv cfssl_linux-amd64 /usr/local/bin/cfssl
+
+wget https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64
+chmod +x cfssljson_linux-amd64
+sudo mv cfssljson_linux-amd64 /usr/local/bin/cfssljson
+```
+
+### Set up a Certificate Authority
+
+Create a CA configuration file:
+```
+cat > ca-config.json <<EOF
+{
+  "signing": {
+    "default": {
+      "expiry": "8760h"
+    },
+    "profiles": {
+      "kubernetes": {
+        "usages": ["signing", "key encipherment", "server auth", "client auth"],
+        "expiry": "8760h"
+      }
+    }
+  }
+}
+EOF
+```
+
+Create a CA certificate signing request:
+
+
+```
+cat > ca-csr.json <<EOF
+{
+  "CN": "Kubernetes",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "Kubernetes",
+      "OU": "CA",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+```
+
+### Generate a CA certificate and private key:
+
+```
+cfssl gencert -initca ca-csr.json | cfssljson -bare ca
+
+```
+### Generate client and server TLS certificates
+
+#### Create the Admin client certificate
+
+```
+cat > admin-csr.json <<EOF
+{
+  "CN": "admin",
+  "hosts": [],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "system:masters",
+      "OU": "Cluster",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+```
+
+Generate the admin client certificate and private key:
+
+```
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -profile=kubernetes \
+  admin-csr.json | cfssljson -bare admin
+```
+
+#### Create the kube-proxy client certificate
+
+Create the kube-proxy client certificate signing request:
+
+```
+cat > kube-proxy-csr.json <<EOF
+{
+  "CN": "system:kube-proxy",
+  "hosts": [],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "system:node-proxier",
+      "OU": "Cluster",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+```
+
+Generate the kube-proxy client certificate and private key:
+
+```
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -profile=kubernetes \
+  kube-proxy-csr.json | cfssljson -bare kube-proxy
+```
+
+#### Create the kubernetes server certificate
+TBD
+
 
 # Next
-- Add 0.0.0.0/0 target the igw on the route table
-- Compare to original setup on GCE
-- Create all the machines and have them configured as per the original
-- Correct any leftovers
+- Create an EIP before setting up the server certificate
+- Final Steps on this chapter
 
 # Cleanup
 - Review if IGW is still needed, as well as SSL access
