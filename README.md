@@ -100,7 +100,7 @@ sudo mv cfssljson_linux-amd64 /usr/local/bin/cfssljson
 
 ### Set up a Certificate Authority
 
-Create a CA configuration file:
+#### Create a CA configuration file:
 ```
 cat > ca-config.json <<EOF
 {
@@ -119,9 +119,7 @@ cat > ca-config.json <<EOF
 EOF
 ```
 
-Create a CA certificate signing request:
-
-
+#### Create a CA certificate signing request:
 ```
 cat > ca-csr.json <<EOF
 {
@@ -152,7 +150,6 @@ cfssl gencert -initca ca-csr.json | cfssljson -bare ca
 ### Generate client and server TLS certificates
 
 #### Create the Admin client certificate
-
 ```
 cat > admin-csr.json <<EOF
 {
@@ -175,8 +172,7 @@ cat > admin-csr.json <<EOF
 EOF
 ```
 
-Generate the admin client certificate and private key:
-
+#### Generate the admin client certificate and private key:
 ```
 cfssl gencert \
   -ca=ca.pem \
@@ -186,10 +182,9 @@ cfssl gencert \
   admin-csr.json | cfssljson -bare admin
 ```
 
-#### Create the kube-proxy client certificate
+### Create the kube-proxy client certificate
 
-Create the kube-proxy client certificate signing request:
-
+#### Create the kube-proxy client certificate signing request:
 ```
 cat > kube-proxy-csr.json <<EOF
 {
@@ -212,8 +207,7 @@ cat > kube-proxy-csr.json <<EOF
 EOF
 ```
 
-Generate the kube-proxy client certificate and private key:
-
+#### Generate the kube-proxy client certificate and private key:
 ```
 cfssl gencert \
   -ca=ca.pem \
@@ -224,8 +218,60 @@ cfssl gencert \
 ```
 
 #### Create the kubernetes server certificate
-TBD
+```
+aws --profile=test-k8s ec2 allocate-address
+KUBERNETES_PUBLIC_ADDRESS="34.211.127.220"
+cat > kubernetes-csr.json <<EOF
+{
+  "CN": "kubernetes",
+  "hosts": [
+    "10.32.0.1",
+    "10.4.1.150",
+    "10.4.1.77",
+    "10.4.1.106",
+    "${KUBERNETES_PUBLIC_ADDRESS}",
+    "127.0.0.1",
+    "kubernetes.default"
+  ],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "Kubernetes",
+      "OU": "Cluster",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+```
+, where "34.211.127.220" was the EIP we got from the previous step, 10.4.1.150 is master01, 10.4.1.77 is master02, 10.4.1.106 and...
+IMPORTANT: I don't have a clue where 10.32.0.1 comes from on Kelsey Hightower's version.
 
+#### Generate the Kubernetes certificate and private key:
+```
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -profile=kubernetes \
+  kubernetes-csr.json | cfssljson -bare kubernetes
+```
+
+### Distribute the TLS certificates
+```
+for host in a b c; do scp ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem ubuntu@$host:/home/ubuntu/ ; done
+for host in x y z; do scp ca.pem kube-proxy.pem kube-proxy-key.pem ubuntu@$host:/home/ubuntu/ ; done
+```
+, where a b and c are the the masters' IPs, and x, y and z are the three workers' IPs
+If you want to check those IPs you can use the AWS console or something like:
+```
+aws --profile=test-k8s ec2 describe-instances --query 'Reservations[*].Instances[*].[InstanceId,NetworkInterfaces[*].PrivateIpAddress,NetworkInterfaces[*].PrivateIpAddresses[*].Association.PublicIp]' | grep -v "\[\|\]"
+```
 
 # Next
 - Create an EIP before setting up the server certificate
