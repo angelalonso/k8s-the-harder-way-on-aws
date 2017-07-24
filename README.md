@@ -221,6 +221,7 @@ cfssl gencert \
 ```
 aws --profile=test-k8s ec2 allocate-address
 KUBERNETES_PUBLIC_ADDRESS="34.211.127.220"
+
 cat > kubernetes-csr.json <<EOF
 {
   "CN": "kubernetes",
@@ -273,9 +274,222 @@ If you want to check those IPs you can use the AWS console or something like:
 aws --profile=test-k8s ec2 describe-instances --query 'Reservations[*].Instances[*].[InstanceId,NetworkInterfaces[*].PrivateIpAddress,NetworkInterfaces[*].PrivateIpAddresses[*].Association.PublicIp]' | grep -v "\[\|\]"
 ```
 
-# Next
-- Create an EIP before setting up the server certificate
-- Final Steps on this chapter
+## Setting up Authentication
+Brutally copied over from https://github.com/kelseyhightower/kubernetes-the-hard-way/blob/master/docs/03-auth-configs.md
+
+- Download and Install kubectl - https://kubernetes.io/docs/tasks/tools/install-kubectl/
+
+### Authentication
+
+The following components will leverage Kubernetes RBAC:
+
+- kubelet (client)
+- kube-proxy (client)
+- kubectl (client)
+
+The other components, mainly the scheduler and controller manager, access the Kubernetes API server locally over the insecure API port which does not require authentication.
+The insecure port is only enabled for local access.
+
+#### Create the TLS Bootstrap Token
+
+This section will walk you through the creation of a TLS bootstrap token that will be used to bootstrap TLS client certificates for kubelets.
+
+Generate a token:
+```
+BOOTSTRAP_TOKEN=$(head -c 16 /dev/urandom | od -An -t x | tr -d ' ')
+```
+
+Generate a token file:
+```
+cat > token.csv <<EOF
+${BOOTSTRAP_TOKEN},kubelet-bootstrap,10001,"system:kubelet-bootstrap"
+EOF
+```
+
+Distribute the token
+```
+for host in a b c; do scp token.csv ubuntu@$host:/home/ubuntu/ ; done
+```
+, where a b and c are the the masters' IPs.
+
+### Client Authentication Configs
+
+This section will walk you through creating kubeconfig files that will be used to bootstrap kubelets, which will then generate their own kubeconfigs based on dynamically generated certificates, and a kubeconfig for authenticating kube-proxy clients.
+
+Each kubeconfig requires a Kubernetes master to connect to. To support H/A the IP address assigned to the load balancer sitting in front of the Kubernetes API servers will be used.
+
+#### Set the kubernetes Public Address
+Make sure you still have the EIP as an environment variable set:
+```
+KUBERNETES_PUBLIC_ADDRESS="34.211.127.220"
+```
+, where 34.211.127.220 is the IP we got on a previous step (see "Create the kubernetes server certificate")
+
+### Create client kubeconfig files
+
+#### Create the bootstrap kubeconfig file
+```
+kubectl config set-cluster kubernetes-the-hard-way \
+  --certificate-authority=ca.pem \
+  --embed-certs=true \
+  --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443 \
+  --kubeconfig=bootstrap.kubeconfig
+```
+```
+kubectl config set-credentials kubelet-bootstrap \
+  --token=${BOOTSTRAP_TOKEN} \
+  --kubeconfig=bootstrap.kubeconfig
+```
+```
+kubectl config set-context default \
+  --cluster=kubernetes-the-hard-way \
+  --user=kubelet-bootstrap \
+  --kubeconfig=bootstrap.kubeconfig
+```
+```
+kubectl config use-context default --kubeconfig=bootstrap.kubeconfig
+```
+
+#### Create the kube-proxy kubeconfig
+```
+kubectl config set-cluster kubernetes-the-hard-way \
+  --certificate-authority=ca.pem \
+  --embed-certs=true \
+  --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443 \
+  --kubeconfig=kube-proxy.kubeconfig
+```
+```
+kubectl config set-credentials kube-proxy \
+  --client-certificate=kube-proxy.pem \
+  --client-key=kube-proxy-key.pem \
+  --embed-certs=true \
+  --kubeconfig=kube-proxy.kubeconfig
+```
+```
+kubectl config set-context default \
+  --cluster=kubernetes-the-hard-way \
+  --user=kube-proxy \
+  --kubeconfig=kube-proxy.kubeconfig
+```
+```
+kubectl config use-context default --kubeconfig=kube-proxy.kubeconfig
+```
+
+### Distribute the client kubeconfig files
+```
+for host in x y z; do scp bootstrap.kubeconfig kube-proxy.kubeconfig ubuntu@$host:/home/ubuntu/ ; done
+```
+, where x, y and z are your workers' IPs
+
+## Bootstrapping a H/A etcd cluster
+Based on https://github.com/kelseyhightower/kubernetes-the-hard-way/blob/master/docs/04-etcd.md
+
+We will now setup a 3 node etcd cluster on master01, master02 and master03
+
+### Why
+
+All Kubernetes components are stateless which greatly simplifies managing a Kubernetes cluster. All state is stored in etcd, which is a database and must be treated specially. To limit the number of compute resource to complete this lab etcd is being installed on the Kubernetes controller nodes, although some people will prefer to run etcd on a dedicated set of machines for the following reasons:
+
+    The etcd lifecycle is not tied to Kubernetes. We should be able to upgrade etcd independently of Kubernetes.
+    Scaling out etcd is different than scaling out the Kubernetes Control Plane.
+    Prevent other applications from taking up resources (CPU, Memory, I/O) required by etcd.
+
+However, all the e2e tested configurations currently run etcd on the master nodes.
+
+### Provision the etcd Cluster
+
+Until further notice, Run all the following commands on all workers:
+
+#### TLS Certificates
+
+The TLS certificates created in the Setting up a CA and TLS Cert Generation lab will be used to secure communication between the Kubernetes API server and the etcd cluster. The TLS certificates will also be used to limit access to the etcd cluster using TLS client authentication. Only clients with a TLS certificate signed by a trusted CA will be able to access the etcd cluster.
+
+Copy the TLS certificates to the etcd configuration directory:
+```
+sudo mkdir -p /etc/etcd/
+sudo cp ca.pem kubernetes-key.pem kubernetes.pem /etc/etcd/
+```
+
+#### Download and Install the etcd binaries
+
+Download the official etcd release binaries from coreos/etcd GitHub project:
+```
+wget https://github.com/coreos/etcd/releases/download/v3.1.4/etcd-v3.1.4-linux-amd64.tar.gz
+```
+Extract and install the etcd server binary and the etcdctl command line client:
+```
+tar -xvf etcd-v3.1.4-linux-amd64.tar.gz
+sudo mv etcd-v3.1.4-linux-amd64/etcd* /usr/bin/
+```
+All etcd data is stored under the etcd data directory. In a production cluster the data directory should be backed by a persistent disk. Create the etcd data directory:
+```
+sudo mkdir -p /var/lib/etcd
+```
+
+#### Set the Internal IP Address
+The internal IP address will be used by etcd to serve client requests and communicate with other etcd peers.
+```
+INTERNAL_IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
+```
+
+Each etcd member must have a unique name within an etcd cluster. Set the etcd name:
+```
+ETCD_NAME=master0X
+```
+, where X is the number of the master you are in
+
+The etcd server will be started and managed by systemd. Create the etcd systemd unit file:
+```
+cat > etcd.service <<EOF
+[Unit]
+Description=etcd
+Documentation=https://github.com/coreos
+
+[Service]
+ExecStart=/usr/bin/etcd \\
+  --name ${ETCD_NAME} \\
+  --cert-file=/etc/etcd/kubernetes.pem \\
+  --key-file=/etc/etcd/kubernetes-key.pem \\
+  --peer-cert-file=/etc/etcd/kubernetes.pem \\
+  --peer-key-file=/etc/etcd/kubernetes-key.pem \\
+  --trusted-ca-file=/etc/etcd/ca.pem \\
+  --peer-trusted-ca-file=/etc/etcd/ca.pem \\
+  --peer-client-cert-auth \\
+  --client-cert-auth \\
+  --initial-advertise-peer-urls https://${INTERNAL_IP}:2380 \\
+  --listen-peer-urls https://${INTERNAL_IP}:2380 \\
+  --listen-client-urls https://${INTERNAL_IP}:2379,http://127.0.0.1:2379 \\
+  --advertise-client-urls https://${INTERNAL_IP}:2379 \\
+  --initial-cluster-token etcd-cluster-0 \\
+  --initial-cluster controller0=https://10.240.0.10:2380,controller1=https://10.240.0.11:2380,controller2=https://10.240.0.12:2380 \\
+  --initial-cluster-state new \\
+  --data-dir=/var/lib/etcd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Once the etcd systemd unit file is ready, move it to the systemd system directory:
+```
+sudo mv etcd.service /etc/systemd/system/
+```
+
+Start the etcd server:
+```
+sudo systemctl daemon-reload
+sudo systemctl enable etcd
+sudo systemctl start etcd
+sudo systemctl status etcd --no-pager
+```
+# NEXTUP
+- Previous steps failed, need to check
+
+
+
+
 
 # Cleanup
 - Review if IGW is still needed, as well as SSL access
