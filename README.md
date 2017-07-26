@@ -68,8 +68,15 @@ aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-727dc9
 aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-727dc908 --port 22 --protocol tcp --cidr 01.02.03.04/32
 aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-757eca0f --port 0-65535 --protocol tcp --source-group sg-727dc908
 aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-757eca0f --port 22 --protocol tcp --cidr 01.02.03.04/32
+
 ```
 , where sg-727dc908 and sg-757eca0f are the security group IDs we got from the two first commands, respectively, and 01.02.03.04 is your local IP address (http://www.whatsmyip.org/)
+
+The following ports are needed for etcd and etcdctl to work as a cluster:
+```
+aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-727dc908 --port 2379 --protocol tcp --source-group sg-727dc908
+aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-727dc908 --port 2380 --protocol tcp --source-group sg-727dc908
+```
 
 ### Provision the machines
 ```
@@ -486,7 +493,7 @@ sudo systemctl start etcd
 sudo systemctl status etcd --no-pager
 ```
 # NEXTUP
-- Previous steps failed, need to check
+- Step 5, k8s controller
 
 
 
