@@ -606,12 +606,112 @@ sudo systemctl start kube-apiserver
 sudo systemctl status kube-apiserver --no-pager
 ```
 
+#### Kubernetes controller manager
 
+```
+cat > kube-controller-manager.service <<EOF
+[Unit]
+Description=Kubernetes Controller Manager
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+ExecStart=/usr/bin/kube-controller-manager \\
+  --address=0.0.0.0 \\
+  --allocate-node-cidrs=true \\
+  --cluster-cidr=10.200.0.0/16 \\
+  --cluster-name=kubernetes \\
+  --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem \\
+  --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem \\
+  --leader-elect=true \\
+  --master=http://${INTERNAL_IP}:8080 \\
+  --root-ca-file=/var/lib/kubernetes/ca.pem \\
+  --service-account-private-key-file=/var/lib/kubernetes/ca-key.pem \\
+  --service-cluster-ip-range=10.32.0.0/16 \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+Start the kube-controller-manager service:
+```
+sudo mv kube-controller-manager.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable kube-controller-manager
+sudo systemctl start kube-controller-manager
+sudo systemctl status kube-controller-manager --no-pager
+```
+
+
+#### Kubernetes scheduler
+```
+cat > kube-scheduler.service <<EOF
+[Unit]
+Description=Kubernetes Scheduler
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+ExecStart=/usr/bin/kube-scheduler \\
+  --leader-elect=true \\
+  --master=http://${INTERNAL_IP}:8080 \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Start the kube-scheduler service:
+```
+sudo mv kube-scheduler.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable kube-scheduler
+sudo systemctl start kube-scheduler
+sudo systemctl status kube-scheduler --no-pager
+```
+
+### Verification
+
+```
+kubectl get componentstatuses
+```
+
+### Setup Kubernetes API Server Frontend Load Balancer
+To be done based on:
+
+"The virtual machines created in this tutorial will not have permission to complete this section. Run the following commands from the same place used to create the virtual machines for this tutorial.
+
+
+gcloud compute http-health-checks create kube-apiserver-health-check \
+  --description "Kubernetes API Server Health Check" \
+  --port 8080 \
+  --request-path /healthz
+
+gcloud compute target-pools create kubernetes-target-pool \
+  --http-health-check=kube-apiserver-health-check \
+  --region us-central1
+
+gcloud compute target-pools add-instances kubernetes-target-pool \
+  --instances controller0,controller1,controller2
+
+KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
+  --region us-central1 \
+  --format 'value(address)')
+
+gcloud compute forwarding-rules create kubernetes-forwarding-rule \
+  --address ${KUBERNETES_PUBLIC_ADDRESS} \
+  --ports 6443 \
+  --target-pool kubernetes-target-pool \
+  --region us-central1
+" <- from K. Hightower's docs
 
 # NEXTUP
-- Troubleshoot why the kube-apiserver did not come up healthy
 
--Continue with Step 5, k8s controller
+- Continue with Step 5, k8s controller, setting up the latest healthchecks and target pools
 
 
 
