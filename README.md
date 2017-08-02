@@ -84,10 +84,25 @@ aws --profile=test-k8s ec2 create-key-pair --key-name afonseca-k8s-key
 ```
 , and copy the contents of KeyMaterial into ~/.ssh/afonseca-k8s-key.priv
 
-Now do the following six times, creating three masters (afonseca-k8s-master01-3) and three workers (afonseca-k8s-worker01-3):
+Now do the following three times for the masters (afonseca-k8s-master01-3):
 ```
 aws --profile=test-k8s ec2 run-instances --image-id ami-835b4efa --instance-type t2.small --key-name afonseca-k8s-key --security-group-ids sg-727dc908 --subnet-id subnet-4ce1072a --associate-public-ip-address
+```
+, where sg-727dc908 is the masters security group ID you got from a previous step
+, and subnet-4ce1072a is the masters subnet ID you got from a previous step
+```
 aws --profile=test-k8s ec2 create-tags --resources i-0526417e4384cc4cc --tags Key=Name,Value=afonseca-k8s-master01
+```
+, where i-0526417e4384cc4cc is the InstanceID you get from the previous step...
+
+...and do the following another three times for the workers (afonseca-k8s-worker01-3):
+```
+aws --profile=test-k8s ec2 run-instances --image-id ami-835b4efa --instance-type t2.small --key-name afonseca-k8s-key --security-group-ids sg-757eca0f --subnet-id subnet-e5e50383 --associate-public-ip-address
+```
+, where sg-757eca0f is the masters security group ID you got from a previous step
+, and subnet-e5e50383 is the masters subnet ID you got from a previous step
+```
+aws --profile=test-k8s ec2 create-tags --resources i-02e8db8ca2d52c7ac --tags Key=Name,Value=afonseca-k8s-worker01
 ```
 , where i-0526417e4384cc4cc is the InstanceID you get from the previous step.
 
@@ -681,40 +696,33 @@ kubectl get componentstatuses
 ```
 
 ### Setup Kubernetes API Server Frontend Load Balancer
-To be done based on:
 
-"The virtual machines created in this tutorial will not have permission to complete this section. Run the following commands from the same place used to create the virtual machines for this tutorial.
+Create a Load Balancer for these machines:
 
+```
+aws --profile=test-k8s elb create-load-balancer --load-balancer-name afonseca-k8s-elb --listeners "Protocol=HTTP,LoadBalancerPort=6443,InstanceProtocol=HTTP,InstancePort=6443" --subnets subnet-4ce1072a
+```
+, where subnet-4ce1072a is the previously created masters-subnet id
 
-gcloud compute http-health-checks create kube-apiserver-health-check \
-  --description "Kubernetes API Server Health Check" \
-  --port 8080 \
-  --request-path /healthz
+Configure the health check for this ELB
+```
+aws --profile=test-k8s elb configure-health-check --load-balancer-name afonseca-k8s-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
+```
 
-gcloud compute target-pools create kubernetes-target-pool \
-  --http-health-check=kube-apiserver-health-check \
-  --region us-central1
+, where afonseca-k8s-elb is the Load Balancer we just created above
 
-gcloud compute target-pools add-instances kubernetes-target-pool \
-  --instances controller0,controller1,controller2
+Now register the master instances in the ELB:
+```
+aws --profile=test-k8s elb register-instances-with-load-balancer --load-balancer-name afonseca-k8s-elb --instances  i-0526417e4384cc4cc i-09c0a207c7cb864e4 i-031e5cec319b82094
+```
 
-KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
-  --region us-central1 \
-  --format 'value(address)')
+, where i-0526417e4384cc4cc i-09c0a207c7cb864e4 i-031e5cec319b82094 are the restult of running:
+```
+aws --profile=test-k8s ec2 describe-instances --filters "Name=subnet-id,Values=subnet-4ce1072a" | grep "InstanceId"
+```
 
-gcloud compute forwarding-rules create kubernetes-forwarding-rule \
-  --address ${KUBERNETES_PUBLIC_ADDRESS} \
-  --ports 6443 \
-  --target-pool kubernetes-target-pool \
-  --region us-central1
-" <- from K. Hightower's docs
 
 # NEXTUP
-
-- Continue with Step 5, k8s controller, setting up the latest healthchecks and target pools
-
-
-
 
 
 # Cleanup
