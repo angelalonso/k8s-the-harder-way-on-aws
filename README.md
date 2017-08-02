@@ -420,7 +420,7 @@ However, all the e2e tested configurations currently run etcd on the master node
 
 ### Provision the etcd Cluster
 
-Until further notice, Run all the following commands on all workers:
+Until further notice, Run all the following commands on all masters:
 
 #### TLS Certificates
 
@@ -721,9 +721,191 @@ aws --profile=test-k8s elb register-instances-with-load-balancer --load-balancer
 aws --profile=test-k8s ec2 describe-instances --filters "Name=subnet-id,Values=subnet-4ce1072a" | grep "InstanceId"
 ```
 
+## Bootstrapping Kubernetes Workers
+
+### Why
+
+Kubernetes worker nodes are responsible for running your containers. All Kubernetes clusters need one or more worker nodes. We are running the worker nodes on dedicated machines for the following reasons:
+
+    Ease of deployment and configuration
+    Avoid mixing arbitrary workloads with critical cluster components. We are building machines with just enough resources so we don't have to worry about wasting resources.
+
+Some people would like to run workers and cluster services anywhere in the cluster. This is totally possible, and you'll have to decide what's best for your environment.
+
+### Prerequisites
+
+Each worker node will provision a unique TLS client certificate as defined in the kubelet TLS bootstrapping guide. The kubelet-bootstrap user must be granted permission to request a client TLS certificate.
+
+ssh into one of the masters and, from there, enable TLS bootstrapping by binding the kubelet-bootstrap user to the system:node-bootstrapper cluster role:
+```
+kubectl create clusterrolebinding kubelet-bootstrap \
+  --clusterrole=system:node-bootstrapper \
+  --user=kubelet-bootstrap
+```
+
+On each worker, run the following:
+```
+sudo mkdir -p /var/lib/{kubelet,kube-proxy,kubernetes}
+sudo mkdir -p /var/run/kubernetes
+sudo mv bootstrap.kubeconfig /var/lib/kubelet
+sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy
+```
+
+move TLS certs in place
+
+```
+sudo mv ca.pem /var/lib/kubernetes/
+```
+
+### Install Docker
+
+```
+wget https://get.docker.com/builds/Linux/x86_64/docker-1.12.6.tgz
+tar -xvf docker-1.12.6.tgz
+sudo cp docker/docker* /usr/bin/
+```
+
+Create the Docker systemd unit file:
+
+```
+cat > docker.service <<EOF
+[Unit]
+Description=Docker Application Container Engine
+Documentation=http://docs.docker.io
+
+[Service]
+ExecStart=/usr/bin/docker daemon \\
+  --iptables=false \\
+  --ip-masq=false \\
+  --host=unix:///var/run/docker.sock \\
+  --log-level=error \\
+  --storage-driver=overlay
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+
+Start the docker service:
+```
+sudo mv docker.service /etc/systemd/system/docker.service
+sudo systemctl daemon-reload
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo docker version
+```
+
+### Install the kubelet
+
+The Kubelet can now use CNI - the Container Network Interface to manage machine level networking requirements.
+
+Download and install CNI plugins
+
+```
+sudo mkdir -p /opt/cni
+wget https://storage.googleapis.com/kubernetes-release/network-plugins/cni-amd64-0799f5732f2a11b329d9e3d51b9c8f2e3759f2ff.tar.gz
+sudo tar -xvf cni-amd64-0799f5732f2a11b329d9e3d51b9c8f2e3759f2ff.tar.gz -C /opt/cni
+```
+
+Download and install the Kubernetes worker binaries:
+
+```
+wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kubectl
+wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kube-proxy
+wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kubelet
+chmod +x kubectl kube-proxy kubelet
+sudo mv kubectl kube-proxy kubelet /usr/bin/
+```
+
+Create the kubelet systemd unit file:
+
+```
+API_SERVERS=$(sudo cat /var/lib/kubelet/bootstrap.kubeconfig | \
+  grep server | cut -d ':' -f2,3,4 | tr -d '[:space:]')
+
+cat > kubelet.service <<EOF
+[Unit]
+Description=Kubernetes Kubelet
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/bin/kubelet \\
+  --api-servers=${API_SERVERS} \\
+  --allow-privileged=true \\
+  --cluster-dns=10.32.0.10 \\
+  --cluster-domain=cluster.local \\
+  --container-runtime=docker \\
+  --experimental-bootstrap-kubeconfig=/var/lib/kubelet/bootstrap.kubeconfig \\
+  --network-plugin=kubenet \\
+  --kubeconfig=/var/lib/kubelet/kubeconfig \\
+  --serialize-image-pulls=false \\
+  --register-node=true \\
+  --tls-cert-file=/var/lib/kubelet/kubelet-client.crt \\
+  --tls-private-key-file=/var/lib/kubelet/kubelet-client.key \\
+  --cert-dir=/var/lib/kubelet \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo mv kubelet.service /etc/systemd/system/kubelet.service
+sudo systemctl daemon-reload
+sudo systemctl enable kubelet
+sudo systemctl start kubelet
+sudo systemctl status kubelet --no-pager
+```
+
+### kube-proxy
+
+```
+cat > kube-proxy.service <<EOF
+[Unit]
+Description=Kubernetes Kube Proxy
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+ExecStart=/usr/bin/kube-proxy \\
+  --cluster-cidr=10.200.0.0/16 \\
+  --masquerade-all=true \\
+  --kubeconfig=/var/lib/kube-proxy/kube-proxy.kubeconfig \\
+  --proxy-mode=iptables \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo mv kube-proxy.service /etc/systemd/system/kube-proxy.service
+sudo systemctl daemon-reload
+sudo systemctl enable kube-proxy
+sudo systemctl start kube-proxy
+sudo systemctl status kube-proxy --no-pager
+```
+
+### Approve the TLS certificate requests
+
+Each worker node will submit a certificate signing request which must be approved before the node is allowed to join the cluster.
+
+ssh into one of the masters and, from there, List the pending certificate requests:
+```
+kubectl get csr
+```
+
+--ERROR: No certs arrived, no connection through 6443 I believe
+
 
 # NEXTUP
-
+- Solve issue with 6443 (no csr but also ELB shows it's not "healthy")
 
 # Cleanup
 - Review if IGW is still needed, as well as SSL access
