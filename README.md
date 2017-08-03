@@ -106,6 +106,46 @@ aws --profile=test-k8s ec2 create-tags --resources i-02e8db8ca2d52c7ac --tags Ke
 ```
 , where i-0526417e4384cc4cc is the InstanceID you get from the previous step.
 
+### Setup Kubernetes API Server Frontend Load Balancer
+
+ATTENTION: This has been changed from the origina because we are going to use the ELB A-Record in the following step
+
+Create a Load Balancer for these machines:
+
+```
+aws --profile=test-k8s elb create-load-balancer --load-balancer-name afonseca-k8s-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets subnet-4ce1072a
+```
+, where subnet-4ce1072a is the previously created masters-subnet id. Take note of the ELB DNSName you get (*)
+
+Configure the health check for this ELB
+```
+aws --profile=test-k8s elb configure-health-check --load-balancer-name afonseca-k8s-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
+```
+
+, where afonseca-k8s-elb is the Load Balancer we just created above
+
+Now register the master instances in the ELB:
+```
+aws --profile=test-k8s elb register-instances-with-load-balancer --load-balancer-name afonseca-k8s-elb --instances  i-0526417e4384cc4cc i-09c0a207c7cb864e4 i-031e5cec319b82094
+```
+
+, where i-0526417e4384cc4cc i-09c0a207c7cb864e4 i-031e5cec319b82094 are the restult of running:
+```
+aws --profile=test-k8s ec2 describe-instances --filters "Name=subnet-id,Values=subnet-4ce1072a" | grep "InstanceId"
+```
+
+Check the new ELB's security group
+TODO: maybe it's better to force sg when we define the ELB?
+```
+aws --profile=test-k8s elb describe-load-balancers --load-balancer-name afonseca-k8s-elb | grep -a1 SecurityGroups
+```
+
+Then open the ports needed
+```
+aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-727dc908 --port 8080 --protocol tcp --source-group sg-a2c276d8
+```
+
+
 ## Setup CA and create TLS certs
 
 ### Install CFSSL
@@ -240,9 +280,10 @@ cfssl gencert \
 ```
 
 #### Create the kubernetes server certificate
+
+The original uses an EIP, but we are going to use the ELB DNS instead
 ```
-aws --profile=test-k8s ec2 allocate-address
-KUBERNETES_PUBLIC_ADDRESS="34.211.127.220"
+KUBERNETES_PUBLIC_ADDRESS="afonseca-k8s-elb-1913340698.us-west-2.elb.amazonaws.com"
 echo $KUBERNETES_PUBLIC_ADDRESS
 
 cat > kubernetes-csr.json <<EOF
@@ -273,8 +314,8 @@ cat > kubernetes-csr.json <<EOF
 }
 EOF
 ```
-, where "34.211.127.220" was the EIP we got from the previous step, 10.4.1.150 is master01, 10.4.1.77 is master02, 10.4.1.106 and...
-IMPORTANT: I don't have a clue where 10.32.0.1 comes from on Kelsey Hightower's version.
+, where 10.4.1.150 is master01, 10.4.1.77 is master02, 10.4.1.106 and...
+IMPORTANT: I don't have a clue where 10.32.0.1 comes from on Kelsey Hightower's version. UPDATE: I might have some clue
 IMPORTANT: make sure KUBERNETES_PUBLIC_ADDRESS gets substituted by the IP
 
 #### Generate the Kubernetes certificate and private key:
@@ -636,7 +677,7 @@ Documentation=https://github.com/GoogleCloudPlatform/kubernetes
 ExecStart=/usr/bin/kube-controller-manager \\
   --address=0.0.0.0 \\
   --allocate-node-cidrs=true \\
-  --cluster-cidr=10.200.0.0/16 \\
+  --cluster-cidr=10.4.0.0/16 \\
   --cluster-name=kubernetes \\
   --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem \\
   --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem \\
@@ -697,43 +738,7 @@ sudo systemctl status kube-scheduler --no-pager
 ```
 kubectl get componentstatuses
 ```
-
-### Setup Kubernetes API Server Frontend Load Balancer
-
-Create a Load Balancer for these machines:
-
-```
-aws --profile=test-k8s elb create-load-balancer --load-balancer-name afonseca-k8s-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets subnet-4ce1072a
-```
-, where subnet-4ce1072a is the previously created masters-subnet id
-
-Configure the health check for this ELB
-```
-aws --profile=test-k8s elb configure-health-check --load-balancer-name afonseca-k8s-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
-```
-
-, where afonseca-k8s-elb is the Load Balancer we just created above
-
-Now register the master instances in the ELB:
-```
-aws --profile=test-k8s elb register-instances-with-load-balancer --load-balancer-name afonseca-k8s-elb --instances  i-0526417e4384cc4cc i-09c0a207c7cb864e4 i-031e5cec319b82094
-```
-
-, where i-0526417e4384cc4cc i-09c0a207c7cb864e4 i-031e5cec319b82094 are the restult of running:
-```
-aws --profile=test-k8s ec2 describe-instances --filters "Name=subnet-id,Values=subnet-4ce1072a" | grep "InstanceId"
-```
-
-Check the new ELB's security group
-TODO: maybe it's better to force sg when we define the ELB?
-```
-aws --profile=test-k8s elb describe-load-balancers --load-balancer-name afonseca-k8s-elb | grep -a1 SecurityGroups
-```
-
-Then open the ports needed
-```
-aws --profile=test-k8s ec2 authorize-security-group-ingress --group-id sg-727dc908 --port 8080 --protocol tcp --source-group sg-a2c276d8
-```
+...Bootstraping the ELB was done before, at provisioning time
 
 ## Bootstrapping Kubernetes Workers
 
@@ -922,6 +927,8 @@ kubectl get csr
 
 
 # NEXTUP
+- Clean up everything
+- Recreate everything automatically with a script
 - Solve issue with 6443 (no csr but also ELB shows it's not "healthy")
 
 # Cleanup
