@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 
 #VARS
-#TODO: find my local IP (http://www.whatsmyip.org/)
-MYIP=$(whatsmyip)
+MYIP=$(curl ipinfo.io/ip)
 FOLDR="~/k8s-aws"
+FOLDR="/home/aaf/Software/Dev/k8s-the-harder-way-on-aws/aux"
+CFG="${FOLDR}/config.cfg"
 CA_FOLDR="${FOLDR}/ca"
 AWSPROF="test-k8s" # Profile in your ~/.aws config file
-STACK="${STACK}"
+
+STACK="af-k8s"
+SSHKEY="$HOME/.ssh/$STACK-key.priv"
 CIDR="10.4.0.0/16"
 CIDR_MASTER="10.4.1.0/24"
 CIDR_WORKER="10.4.2.0/24"
-#TODO: Check what this is reall used for
+#TODO: Check what this is really used for
 K8S_DNS="10.32.0.1"
 
 PORT_SSH="22"
@@ -24,34 +27,48 @@ INSTANCE_TYPE="t2.small"
 NR_MASTERS=3
 NR_WORKERS=3
 
-# TODO: how to get result here?
+mkdir -p ${FOLDR}
+
+. ${CFG}
+
+provisioning() {
+
+echo "PROVISIONING!"
+
+# Clean up the previous definitions:
+cp $CFG $CFG.prev
+echo > $CFG
+
 # Create and tag VPC
-VPCID=$(aws --profile=${AWSPROF} ec2 create-vpc --cidr-block ${CIDR} | grep VPCRESULT)
+VPCID=$(aws --profile=${AWSPROF} ec2 create-vpc --cidr-block ${CIDR} | jq -r '.Vpc.VpcId')
+echo "VPCID=\"${VPCID}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${VPCID} --tags Key=Name,Value=${STACK}-vpc
 
 # Enable DNS for the VPC
 aws --profile=${AWSPROF} ec2 modify-vpc-attribute --vpc-id ${VPCID} --enable-dns-support
 aws --profile=${AWSPROF} ec2 modify-vpc-attribute --vpc-id ${VPCID} --enable-dns-hostnames
 
-# TODO: how to get result here?
 # Subnets for masters and workers
-SUBNET_MASTER=$(aws --profile=${AWSPROF} ec2 create-subnet --vpc-id ${VPCID} --cidr-block ${CIDR_MASTER} | grep SUBNET)
+
+SUBNET_MASTER=$(aws --profile=${AWSPROF} ec2 create-subnet --vpc-id ${VPCID} --cidr-block ${CIDR_MASTER} | jq -r '.Subnet.SubnetId')
+echo "SUBNET_MASTER=\"${SUBNET_MASTER}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${SUBNET_MASTER} --tags Key=Name,Value=${STACK}-subnet-masters
-SUBNET_WORKER=$(aws --profile=${AWSPROF} ec2 create-subnet --vpc-id ${VPCID} --cidr-block ${CIDR_WORKER} | grep SUBNET)
+SUBNET_WORKER=$(aws --profile=${AWSPROF} ec2 create-subnet --vpc-id ${VPCID} --cidr-block ${CIDR_WORKER} | jq -r '.Subnet.SubnetId')
+echo "SUBNET_WORKER=\"${SUBNET_WORKER}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${SUBNET_WORKER} --tags Key=Name,Value=${STACK}-subnet-workers
 
-# TODO: how to get result here?
 # Create and attach IGW
-IGW=$(aws --profile=${AWSPROF} ec2 create-internet-gateway | grep IGWID)
+IGW=$(aws --profile=${AWSPROF} ec2 create-internet-gateway | jq -r '.InternetGateway.InternetGatewayId')
+echo "IGW=\"${IGW}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${IGW} --tags Key=Name,Value=${STACK}-internet-gateway
 aws --profile=${AWSPROF} ec2 attach-internet-gateway --internet-gateway-id ${IGW} --vpc-id ${VPCID}
 
 # Create and config Security Groups and rules
-# TODO: how to get result here?
-SG_MASTERS=$(aws --profile=${AWSPROF} ec2 create-security-group --vpc-id ${VPCID} --group-name ${STACK}-sg-masters --description ${STACK}-security-group-masters | grep SG_RESULT)
+SG_MASTERS=$(aws --profile=${AWSPROF} ec2 create-security-group --vpc-id ${VPCID} --group-name ${STACK}-sg-masters --description ${STACK}-security-group-masters | jq -r '.GroupId')
+echo "SG_MASTERS=\"${SG_MASTERS}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${SG_MASTERS} --tags Key=Name,Value=${STACK}-sg-masters
-# TODO: how to get result here?
-SG_WORKERS=$(aws --profile=${AWSPROF} ec2 create-security-group --vpc-id ${VPCID} --group-name ${STACK}-sg-workers --description ${STACK}-security-group-workers | grep SG_RESULT)
+SG_WORKERS=$(aws --profile=${AWSPROF} ec2 create-security-group --vpc-id ${VPCID} --group-name ${STACK}-sg-workers --description ${STACK}-security-group-workers | jq -r '.GroupId')
+echo "SG_WORKERS=\"${SG_WORKERS}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${SG_WORKERS} --tags Key=Name,Value=${STACK}-sg-workers
 
 # Open ports for your own ssh and for both secgroups to communicate
@@ -65,8 +82,21 @@ aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG_MA
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG_MASTERS} --port ${PORT_ETCDCTL} --protocol tcp --source-group ${SG_MASTERS}
 
 # Provision the machines
-# TODO: Copy contents of KeyMaterial from here into ~/.ssh/${STACK}-key.priv
-aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key
+if [ -f  ${SSHKEY} ]; then
+  cp ${SSHKEY} ${SSHKEY}.old
+  echo "PREVIOUS SSH KEY exists, saved on ${SSHKEY}.old "
+else
+  touch ${SSHKEY}
+fi
+aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key | jq -r '.KeyMaterial' > ${SSHKEY}
+
+}
+
+testing() {
+}
+
+
+untested() {
 
 # TODO: how to get result here?
 for i in $(seq $NR_MASTERS); do
@@ -376,3 +406,6 @@ EOF
 done
 
 # Bootstrapping an H/A Kubernetes Control Plane
+}
+#provisioning
+testing
