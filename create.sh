@@ -21,7 +21,7 @@ PORT_SSH="22"
 PORT_ETCD="2379"
 PORT_ETCDCTL="2380"
 
-AMI="amii-835b4efa"
+AMI="ami-835b4efa"
 INSTANCE_TYPE="t2.small"
 
 NR_MASTERS=3
@@ -33,7 +33,6 @@ mkdir -p ${FOLDR}
 
 provisioning() {
 
-echo "PROVISIONING!"
 
 # Clean up the previous definitions:
 cp $CFG $CFG.prev
@@ -90,30 +89,47 @@ else
 fi
 aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key | jq -r '.KeyMaterial' > ${SSHKEY}
 
-}
-
-testing() {
-}
-
-
-untested() {
-
-# TODO: how to get result here?
-for i in $(seq $NR_MASTERS); do
-  MASTER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG_MASTERS} --subnet-id ${SUBNET_MASTER} --associate-public-ip-address | grep INSTRESULT)
-  #TODO: $i should be 03 or 003 instead of 3
+for i in $(seq -w $NR_MASTERS); do
+  # Provision and tag the master
+  MASTER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG_MASTERS} --subnet-id ${SUBNET_MASTER} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
+  MASTERLIST="${MASTERLIST} ${MASTER_ID[$i]}"
+  echo "MASTER_ID[$i]=\"${MASTER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${MASTER_ID[$i]} --tags Key=Name,Value=${STACK}-master$i
+  # Get its Internal and its Public IPs
+  MASTER_IP_INT[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${MASTER_ID[$i]} | jq -r '.Reservations[].Instances[].PrivateIpAddress')
+  echo "MASTER_IP_INT[$i]=\"${MASTER_IP_INT[$i]}\"" >> ${CFG}
+  MASTER_IP_PUB[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${MASTER_ID[$i]} | jq -r '.Reservations[].Instances[].PublicIpAddress')
+  echo "MASTER_IP_PUB[$i]=\"${MASTER_IP_PUB[$i]}\"" >> ${CFG}
 done
+echo "MASTERLIST=\"${MASTERLIST}\"" >> ${CFG}
 
-# TODO: how to get result here?
-for i in $(seq $NR_WORKERS); do
-  WORKER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG_WORKERS} --subnet-id ${SUBNET_WORKER} --associate-public-ip-address | grep INSTRESULT)
-  #TODO: $i should be 03 or 003 instead of 3
+
+for i in $(seq -w $NR_WORKERS); do
+  WORKER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG_WORKERS} --subnet-id ${SUBNET_WORKER} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
+  WORKERLIST="${WORKERLIST} ${WORKER_ID[$i]}"
+  echo "WORKER_ID[$i]=\"${WORKER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${WORKER_ID[$i]} --tags Key=Name,Value=${STACK}-worker$i
+  # Get its Public IP
+  WORKER_IP_PUB[$i]=$(aws --profile=${AWSPROF} ec1 describe-instances --instance-id ${WORKER_ID[$i]} | jq -r '.Reservations[].Instances[].PublicIpAddress')
+  echo "WORKER_IP_PUB[$i]=\"${WORKER_IP_PUB[$i]}\"" >> ${CFG}
 done
+echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
+
+# Create the main ELB for K8s
+ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET_MASTER} | jq -r '.DNSName')
+echo "ELB_DNS=\"${ELB_DNS}\"" >> ${CFG}
+aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK}-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
+aws --profile=${AWSPROF} elb register-instances-with-load-balancer --load-balancer-name ${STACK}-elb --instances ${MASTERLIST}
+
+}
+
+ca_config() {
+
+echo "CONFIGURING CA!"
 
 # Setup CA and create TLS certs
 # Install CFSSL
+echo "Installing CFSSL"
 mkdir -p ${CA_FOLDR} && cd ${CA_FOLDR}
 wget https://pkg.cfssl.org/R1.2/cfssl_linux-amd64
 chmod +x cfssl_linux-amd64
@@ -125,7 +141,7 @@ sudo mv cfssljson_linux-amd64 /usr/local/bin/cfssljson
 
 # Set up a Certificate Authority
 # Create a CA configuration file:
-cat > ca-config.json <<EOF
+cat > ${CA_FOLDR}/ca-config.json <<EOF
 {
   "signing": {
     "default": {
@@ -142,7 +158,7 @@ cat > ca-config.json <<EOF
 EOF
 
 # Create a CA certificate signing request:
-cat > ca-csr.json <<EOF
+cat > ${CA_FOLDR}/ca-csr.json <<EOF
 {
   "CN": "Kubernetes",
   "key": {
@@ -166,7 +182,7 @@ cfssl gencert -initca ca-csr.json | cfssljson -bare ca
 
 # Generate client and server TLS certificates
 # Create the Admin client certificate
-cat > admin-csr.json <<EOF
+cat > ${CA_FOLDR}/admin-csr.json <<EOF
 {
   "CN": "admin",
   "hosts": [],
@@ -196,7 +212,7 @@ cfssl gencert \
 
 # Create the kube-proxy client certificate
 # Create the kube-proxy client certificate signing request:
-cat > kube-proxy-csr.json <<EOF
+cat > ${CA_FOLDR}/kube-proxy-csr.json <<EOF
 {
   "CN": "system:kube-proxy",
   "hosts": [],
@@ -225,28 +241,19 @@ cfssl gencert \
   kube-proxy-csr.json | cfssljson -bare kube-proxy
 
 # Create the kubernetes server certificate
-# TODO: Find proper Public address to use, and ho to get it
-#aws --profile=test-k8s ec2 allocate-address
-K8S_PUBLIC_ADDRESS="34.211.127.220"
+K8S_PUBLIC_ADDRESS=${ELB_DNS}
 
-# TODO: How to find out the IPs?
-# Better yet, TODO: put this on the loop below
-# aws --profile=test-k8s ec2 describe-instances --query 'Reservations[*].Instances[*].[InstanceId,NetworkInterfaces[*].PrivateIpAddress,NetworkInterfaces[*].PrivateIpAddresses[*].Association.PublicIp]' | grep -v "\[\|\]"
-MASTER_IP_INT[1]="10.4.1.150"
-MASTER_IP_INT[2]="10.4.1.77"
-MASTER_IP_INT[3]="10.4.1.106"
-
-cat > kubernetes-csr.json <<EOF
+cat > ${CA_FOLDR}/kubernetes-csr.json <<EOF
 {
   "CN": "kubernetes",
   "hosts": [
     "${K8S_DNS}",
 EOF
-for i in $(seq $NR_MASTERS); do
+for i in $(seq -w $NR_MASTERS); do
   #TODO: here we should get the IP
-  echo '    "'${MASTER_IP_INT[$i]}'",' >> kubernetes-csr.json
+  echo '    "'${MASTER_IP_INT[$i]}'",' >> ${CA_FOLDR}/kubernetes-csr.json
 done
-cat >> kubernetes-csr.json <<EOF
+cat >> ${CA_FOLDR}/kubernetes-csr.json <<EOF
     "${K8S_PUBLIC_ADDRESS}",
     "127.0.0.1",
     "kubernetes.default"
@@ -269,27 +276,33 @@ EOF
 
 # Generate the Kubernetes certificate and private key:
 cfssl gencert \
-  -ca=ca.pem \
-  -ca-key=ca-key.pem \
-  -config=ca-config.json \
+  -ca=${CA_FOLDR}/ca.pem \
+  -ca-key=${CA_FOLDR}/ca-key.pem \
+  -config=${CA_FOLDR}/ca-config.json \
   -profile=kubernetes \
-  kubernetes-csr.json | cfssljson -bare kubernetes
+  ${CA_FOLDR}/kubernetes-csr.json | cfssljson -bare kubernetes
 
+}
+
+
+testing() {
+   echo
 # Distribute the TLS certificates
-for i in $(seq $NR_MASTERS); do
-  #TODO: here we should get the external IP
-  MASTER_IP_PUB[$i]=""
-  scp ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
+cd ${CA_FOLDR}
+for i in $(seq -w $NR_MASTERS); do
+  scp -i ${SSHKEY} ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
 done
 
-# TODO: How to find out the IPs?
-# aws --profile=test-k8s ec2 describe-instances --query 'Reservations[*].Instances[*].[InstanceId,NetworkInterfaces[*].PrivateIpAddress,NetworkInterfaces[*].PrivateIpAddresses[*].Association.PublicIp]' | grep -v "\[\|\]"
-for i in $(seq $NR_WORKERS); do
-  #TODO: here we should get the external IP
-  WORKER_IP_PUB[$i]=""
-  scp ca.pem kube-proxy.pem kube-proxy-key.pem ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
+cd ${CA_FOLDR}
+for i in $(seq -w $NR_WORKERS); do
+  scp -i ${SSHKEY} ca.pem kube-proxy.pem kube-proxy-key.pem ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
 done
 
+
+}
+
+
+untested() {
 
 # Setting up Authentication
 #TODO: Check that kubectl is installed
@@ -297,11 +310,11 @@ done
 # Create the TLS Bootstrap Token
 BOOTSTRAP_TOKEN=$(head -c 16 /dev/urandom | od -An -t x | tr -d ' ')
 
-cat > token.csv <<EOF
+cat > ${CA_FOLDR}/token.csv <<EOF
 ${BOOTSTRAP_TOKEN},kubelet-bootstrap,10001,"system:kubelet-bootstrap"
 EOF
 
-for i in $(seq $NR_MASTERS); do
+for i in $(seq -w $NR_MASTERS); do
   scp token.csv ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
 done
 
@@ -346,14 +359,14 @@ kubectl config set-context default \
 kubectl config use-context default --kubeconfig=kube-proxy.kubeconfig
 
 # Distribute the client kubeconfig files
-for i in $(seq $NR_WORKERS); do
+for i in $(seq -w $NR_WORKERS); do
   scp bootstrap.kubeconfig kube-proxy.kubeconfig ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
 done
 
 
 # Bootstrapping a H/A etcd cluster
 # TLS Certificates
-for i in $(seq $NR_MASTERS); do
+for i in $(seq -w $NR_MASTERS); do
   ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo mkdir -p /etc/etcd/ && sudo cp ca.pem kubernetes-key.pem kubernetes.pem /etc/etcd/"
   ssh ubuntu@${MASTER_IP_PUB[$i]} "wget https://github.com/coreos/etcd/releases/download/v3.1.4/etcd-v3.1.4-linux-amd64.tar.gz"
   ssh ubuntu@${MASTER_IP_PUB[$i]} "tar -xvf etcd-v3.1.4-linux-amd64.tar.gz && sudo mv etcd-v3.1.4-linux-amd64/etcd* /usr/bin/"
@@ -364,11 +377,11 @@ done
 # TODO: maybe do this on a script and run
 
 cd $FOLDR
-for i in $(seq $NR_MASTERS); do
+for i in $(seq -w $NR_MASTERS); do
   #TODO: Here it should have 03 or 003, not just master3
   ETCD_NAME[$i]=master$i
   # TODO: Maybe we check internal ip with curl http://169.254.169.254/latest/meta-data/local-ipv4
-  cat > etcd.service <<EOF
+  cat > ${CA_FOLDR}/etcd.service <<EOF
 [Unit]
 Description=etcd
 Documentation=https://github.com/coreos
@@ -408,4 +421,5 @@ done
 # Bootstrapping an H/A Kubernetes Control Plane
 }
 #provisioning
+#ca_config
 testing
