@@ -62,6 +62,14 @@ echo "IGW=\"${IGW}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${IGW} --tags Key=Name,Value=${STACK}-internet-gateway
 aws --profile=${AWSPROF} ec2 attach-internet-gateway --internet-gateway-id ${IGW} --vpc-id ${VPCID}
 
+### Create and config Route Tables
+RTB=$(aws --profile=test-k8s ec2 create-route-table --vpc-id ${VPCID}  | jq -r '.RouteTable.RouteTableId')
+echo "RTB=\"${RTB}\"" >> ${CFG}
+aws --profile=${AWSPROF} ec2 create-tags --resources ${RTB} --tags Key=Name,Value=${STACK}-route-table
+aws --profile=${AWSPROF} ec2 associate-route-table --route-table-id ${RTB} --subnet-id ${SUBNET_MASTER}
+aws --profile=${AWSPROF} ec2 associate-route-table --route-table-id ${RTB} --subnet-id ${SUBNET_WORKER}
+aws --profile=${AWSPROF} ec2 create-route --route-table-id ${RTB} --destination-cidr-block 0.0.0.0/0 --gateway-id ${IGW}
+
 # Create and config Security Groups and rules
 SG_MASTERS=$(aws --profile=${AWSPROF} ec2 create-security-group --vpc-id ${VPCID} --group-name ${STACK}-sg-masters --description ${STACK}-security-group-masters | jq -r '.GroupId')
 echo "SG_MASTERS=\"${SG_MASTERS}\"" >> ${CFG}
@@ -88,6 +96,7 @@ else
   touch ${SSHKEY}
 fi
 aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key | jq -r '.KeyMaterial' > ${SSHKEY}
+sudo chmod 0600 ${SSHKEY}
 
 for i in $(seq -w $NR_MASTERS); do
   # Provision and tag the master
@@ -282,27 +291,22 @@ cfssl gencert \
   -profile=kubernetes \
   ${CA_FOLDR}/kubernetes-csr.json | cfssljson -bare kubernetes
 
+# Distribute the TLS certificates
+# TODO: check that all files are stored in the same folder(currently it is not)
+for i in $(seq -w $NR_MASTERS); do
+  scp -i ${SSHKEY} ${CA_FOLDR}/ca.pem ${CA_FOLDR}/ca-key.pem kubernetes-key.pem kubernetes.pem ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
+done
+
+cd ${CA_FOLDR}
+for i in $(seq -w $NR_WORKERS); do
+  scp -i ${SSHKEY} ${CA_FOLDR}/ca.pem ${CA_FOLDR}/kube-proxy.pem ${CA_FOLDR}/kube-proxy-key.pem ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
+done
+
 }
 
 
 testing() {
    echo
-# Distribute the TLS certificates
-cd ${CA_FOLDR}
-for i in $(seq -w $NR_MASTERS); do
-  scp -i ${SSHKEY} ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
-done
-
-cd ${CA_FOLDR}
-for i in $(seq -w $NR_WORKERS); do
-  scp -i ${SSHKEY} ca.pem kube-proxy.pem kube-proxy-key.pem ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
-done
-
-
-}
-
-
-untested() {
 
 # Setting up Authentication
 #TODO: Check that kubectl is installed
@@ -315,8 +319,14 @@ ${BOOTSTRAP_TOKEN},kubelet-bootstrap,10001,"system:kubelet-bootstrap"
 EOF
 
 for i in $(seq -w $NR_MASTERS); do
-  scp token.csv ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
+  scp -i ${SSHKEY} ${CA_FOLDR}/token.csv ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
 done
+
+
+}
+
+
+untested() {
 
 # Client Authentication Configs
 # Create client kubeconfig files
@@ -360,7 +370,7 @@ kubectl config use-context default --kubeconfig=kube-proxy.kubeconfig
 
 # Distribute the client kubeconfig files
 for i in $(seq -w $NR_WORKERS); do
-  scp bootstrap.kubeconfig kube-proxy.kubeconfig ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
+  scp -i ${SSHKEY} bootstrap.kubeconfig kube-proxy.kubeconfig ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
 done
 
 
@@ -412,7 +422,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-  scp etcd.service ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu
+  scp -i ${SSHKEY} etcd.service ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu
   ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo mv etcd.service /etc/systemd/system/"
   ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl daemon-reload; sudo systemctl enable etcd"
   ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl start etcd; sudo systemctl status etcd --no-pager"
