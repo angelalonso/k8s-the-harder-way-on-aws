@@ -35,7 +35,7 @@ provisioning() {
 
 
 # Clean up the previous definitions:
-cp $CFG $CFG.prev
+cp $CFG $CFG.prev 2>/dev/null
 echo > $CFG
 
 # Create and tag VPC
@@ -88,6 +88,11 @@ aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG_WO
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG_MASTERS} --port ${PORT_ETCD} --protocol tcp --source-group ${SG_MASTERS}
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG_MASTERS} --port ${PORT_ETCDCTL} --protocol tcp --source-group ${SG_MASTERS}
 
+# Open ports for API-server
+#TODO: maybe make these ports a variable?
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG_MASTERS} --port 8080 --protocol tcp --source-group ${SG_MASTERS}
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG_MASTERS} --port 6443 --protocol tcp --cidr ${MYIP}/32
+
 # Provision the machines
 if [ -f  ${SSHKEY} ]; then
   cp ${SSHKEY} ${SSHKEY}.old
@@ -127,6 +132,7 @@ echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
 # Create the main ELB for K8s
 ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET_MASTER} | jq -r '.DNSName')
 echo "ELB_DNS=\"${ELB_DNS}\"" >> ${CFG}
+aws --profile=${AWSPROF} elb apply-security-groups-to-load-balancer --load-balancer-name ${STACK}-elb --security-groups ${SG_MASTERS} ${SG_WORKERS}
 aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK}-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
 aws --profile=${AWSPROF} elb register-instances-with-load-balancer --load-balancer-name ${STACK}-elb --instances ${MASTERLIST}
 
@@ -302,12 +308,6 @@ for i in $(seq -w $NR_WORKERS); do
   scp -i ${SSHKEY} ${CA_FOLDR}/ca.pem ${CA_FOLDR}/kube-proxy.pem ${CA_FOLDR}/kube-proxy-key.pem ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
 done
 
-}
-
-
-testing() {
-   echo
-
 # Setting up Authentication
 #TODO: Check that kubectl is installed
 
@@ -322,17 +322,15 @@ for i in $(seq -w $NR_MASTERS); do
   scp -i ${SSHKEY} ${CA_FOLDR}/token.csv ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
 done
 
-
-}
-
-
-untested() {
+# Only needed if running the following steps isolated
+# BOOTSTRAP_TOKEN=$(cat ${CA_FOLDR}/token.csv | awk -F "," '{print $1}')
+# K8S_PUBLIC_ADDRESS=${ELB_DNS}
 
 # Client Authentication Configs
 # Create client kubeconfig files
 # Create the bootstrap kubeconfig file
 kubectl config set-cluster kubernetes-the-hard-way \
-  --certificate-authority=ca.pem \
+  --certificate-authority=${CA_FOLDR}/ca.pem \
   --embed-certs=true \
   --server=https://${K8S_PUBLIC_ADDRESS}:6443 \
   --kubeconfig=bootstrap.kubeconfig
@@ -350,14 +348,14 @@ kubectl config use-context default --kubeconfig=bootstrap.kubeconfig
 
 # Create the kube-proxy kubeconfig
 kubectl config set-cluster kubernetes-the-hard-way \
-  --certificate-authority=ca.pem \
+  --certificate-authority=${CA_FOLDR}/ca.pem \
   --embed-certs=true \
   --server=https://${K8S_PUBLIC_ADDRESS}:6443 \
   --kubeconfig=kube-proxy.kubeconfig
 
 kubectl config set-credentials kube-proxy \
-  --client-certificate=kube-proxy.pem \
-  --client-key=kube-proxy-key.pem \
+  --client-certificate=${CA_FOLDR}/kube-proxy.pem \
+  --client-key=${CA_FOLDR}/kube-proxy-key.pem \
   --embed-certs=true \
   --kubeconfig=kube-proxy.kubeconfig
 
@@ -373,25 +371,24 @@ for i in $(seq -w $NR_WORKERS); do
   scp -i ${SSHKEY} bootstrap.kubeconfig kube-proxy.kubeconfig ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/
 done
 
+}
+
+etcd_bootstrap() {
 
 # Bootstrapping a H/A etcd cluster
 # TLS Certificates
 for i in $(seq -w $NR_MASTERS); do
-  ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo mkdir -p /etc/etcd/ && sudo cp ca.pem kubernetes-key.pem kubernetes.pem /etc/etcd/"
-  ssh ubuntu@${MASTER_IP_PUB[$i]} "wget https://github.com/coreos/etcd/releases/download/v3.1.4/etcd-v3.1.4-linux-amd64.tar.gz"
-  ssh ubuntu@${MASTER_IP_PUB[$i]} "tar -xvf etcd-v3.1.4-linux-amd64.tar.gz && sudo mv etcd-v3.1.4-linux-amd64/etcd* /usr/bin/"
-  ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo mkdir -p /var/lib/etcd"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mkdir -p /etc/etcd/ && sudo cp ca.pem kubernetes-key.pem kubernetes.pem /etc/etcd/"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "wget https://github.com/coreos/etcd/releases/download/v3.1.4/etcd-v3.1.4-linux-amd64.tar.gz"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "tar -xvf etcd-v3.1.4-linux-amd64.tar.gz && sudo mv etcd-v3.1.4-linux-amd64/etcd* /usr/bin/"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mkdir -p /var/lib/etcd"
 done
 
-# Set the internal IP address
-# TODO: maybe do this on a script and run
-
+# Create the systemd file
 cd $FOLDR
 for i in $(seq -w $NR_MASTERS); do
-  #TODO: Here it should have 03 or 003, not just master3
   ETCD_NAME[$i]=master$i
-  # TODO: Maybe we check internal ip with curl http://169.254.169.254/latest/meta-data/local-ipv4
-  cat > ${CA_FOLDR}/etcd.service <<EOF
+  cat > ${CA_FOLDR}/etcd.service.${ETCD_NAME[$i]} <<EOF
 [Unit]
 Description=etcd
 Documentation=https://github.com/coreos
@@ -412,8 +409,18 @@ ExecStart=/usr/bin/etcd \\
   --listen-client-urls https://${MASTER_IP_INT[$i]}:2379,http://127.0.0.1:2379 \\
   --advertise-client-urls https://${MASTER_IP_INT[$i]}:2379 \\
   --initial-cluster-token etcd-cluster-0 \\
-\#TODO: automate this
-  --initial-cluster master01=https://10.4.1.150:2380,master02=https://10.4.1.77:2380,master03=https://10.4.1.106:2380 \\
+EOF
+LINE="  --initial-cluster "
+for j in $(seq -w $NR_MASTERS); do
+  LINE="${LINE}master$j=https://${MASTER_IP_INT[$j]}:2380"
+  if [ $j -lt $NR_MASTERS ]; then
+    LINE="${LINE},"
+  else
+    LINE="${LINE} \\"
+  fi
+done
+echo ${LINE}  >> ${CA_FOLDR}/etcd.service.${ETCD_NAME[$i]}
+  cat >> ${CA_FOLDR}/etcd.service.${ETCD_NAME[$i]} <<EOF
   --initial-cluster-state new \\
   --data-dir=/var/lib/etcd
 Restart=on-failure
@@ -422,14 +429,160 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-  scp -i ${SSHKEY} etcd.service ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu
-  ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo mv etcd.service /etc/systemd/system/"
-  ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl daemon-reload; sudo systemctl enable etcd"
-  ssh ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl start etcd; sudo systemctl status etcd --no-pager"
+  scp -i ${SSHKEY} ${CA_FOLDR}/etcd.service.${ETCD_NAME[$i]} ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/etcd.service
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mv etcd.service /etc/systemd/system/"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl daemon-reload; sudo systemctl enable etcd"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl start etcd; sudo systemctl status etcd --no-pager"
 done
 
-# Bootstrapping an H/A Kubernetes Control Plane
+# Provision the Kubernetes Controller Cluster
+for i in $(seq -w $NR_MASTERS); do
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mkdir -p /var/lib/kubernetes/ && sudo mv token.csv /var/lib/kubernetes/"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mv ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem /var/lib/kubernetes/"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.7.0/bin/linux/amd64/kube-apiserver"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.7.0/bin/linux/amd64/kube-controller-manager"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.7.0/bin/linux/amd64/kube-scheduler"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.7.0/bin/linux/amd64/kubectl"
+  # Install the k8s binaries
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "chmod +x kube-apiserver kube-controller-manager kube-scheduler kubectl"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mv kube-apiserver kube-controller-manager kube-scheduler kubectl /usr/bin/"
+done
+
+# API server
+for i in $(seq -w $NR_MASTERS); do
+cat > ${CA_FOLDR}/kube-apiserver.service.master$i <<EOF
+[Unit]
+Description=Kubernetes API Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+ExecStart=/usr/bin/kube-apiserver \\
+  --admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,ResourceQuota \\
+  --advertise-address=${MASTER_IP_INT[$i]} \\
+  --allow-privileged=true \\
+  --apiserver-count=3 \\
+  --audit-log-maxage=30 \\
+  --audit-log-maxbackup=3 \\
+  --audit-log-maxsize=100 \\
+  --audit-log-path=/var/lib/audit.log \\
+  --authorization-mode=RBAC \\
+  --bind-address=0.0.0.0 \\
+  --client-ca-file=/var/lib/kubernetes/ca.pem \\
+  --enable-swagger-ui=true \\
+  --etcd-cafile=/var/lib/kubernetes/ca.pem \\
+  --etcd-certfile=/var/lib/kubernetes/kubernetes.pem \\
+  --etcd-keyfile=/var/lib/kubernetes/kubernetes-key.pem \\
+EOF
+LINE="  --etcd-servers=https://"
+for j in $(seq -w $NR_MASTERS); do
+  LINE="${LINE}${MASTER_IP_INT[$j]}:2379"
+  if [ $j -lt $NR_MASTERS ]; then
+    LINE="${LINE},https://"
+  else
+    LINE="${LINE} \\"
+  fi
+done
+echo ${LINE}  >> ${CA_FOLDR}/kube-apiserver.service.master$i
+  cat >> ${CA_FOLDR}/kube-apiserver.service.master$i <<EOF
+  --event-ttl=1h \\
+  --experimental-bootstrap-token-auth \\
+  --insecure-bind-address=0.0.0.0 \\
+  --kubelet-certificate-authority=/var/lib/kubernetes/ca.pem \\
+  --kubelet-client-certificate=/var/lib/kubernetes/kubernetes.pem \\
+  --kubelet-client-key=/var/lib/kubernetes/kubernetes-key.pem \\
+  --kubelet-https=true \\
+  --runtime-config=rbac.authorization.k8s.io/v1alpha1 \\
+  --service-account-key-file=/var/lib/kubernetes/ca-key.pem \\
+  --service-cluster-ip-range=10.32.0.0/24 \\
+  --service-node-port-range=30000-32767 \\
+  --tls-cert-file=/var/lib/kubernetes/kubernetes.pem \\
+  --tls-private-key-file=/var/lib/kubernetes/kubernetes-key.pem \\
+  --token-auth-file=/var/lib/kubernetes/token.csv \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  scp -i ${SSHKEY} ${CA_FOLDR}/kube-apiserver.service.master$i ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/kube-apiserver.service
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mv kube-apiserver.service /etc/systemd/system/"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl daemon-reload; sudo systemctl enable kube-apiserver"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl start kube-apiserver; sudo systemctl status kube-apiserver --no-pager"
+
+done
+
+# Kubernetes controller manager
+for i in $(seq -w $NR_MASTERS); do
+cat > ${CA_FOLDR}/kube-controller-manager.service.master$i <<EOF
+[Unit]
+Description=Kubernetes Controller Manager
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+ExecStart=/usr/bin/kube-controller-manager \\
+  --address=0.0.0.0 \\
+  --allocate-node-cidrs=true \\
+  --cluster-cidr=10.4.0.0/16 \\
+  --cluster-name=kubernetes \\
+  --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem \\
+  --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem \\
+  --leader-elect=true \\
+  --master=http://${MASTER_IP_INT[$i]}:8080 \\
+  --root-ca-file=/var/lib/kubernetes/ca.pem \\
+  --service-account-private-key-file=/var/lib/kubernetes/ca-key.pem \\
+  --service-cluster-ip-range=10.32.0.0/16 \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  scp -i ${SSHKEY} ${CA_FOLDR}/kube-controller-manager.service.master$i ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/kube-controller-manager.service
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mv kube-controller-manager.service /etc/systemd/system/"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl daemon-reload; sudo systemctl enable kube-controller-manager"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl start kube-controller-manager; sudo systemctl status kube-controller-manager --no-pager"
+
+done
+
+# Kubernetes scheduler
+for i in $(seq -w $NR_MASTERS); do
+cat > ${CA_FOLDR}/kube-scheduler.service.master$i <<EOF
+[Unit]
+Description=Kubernetes Scheduler
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+ExecStart=/usr/bin/kube-scheduler \\
+  --leader-elect=true \\
+  --master=http://${MASTER_IP_INT[$i]}:8080 \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+#Start the kube-scheduler service:
+  scp -i ${SSHKEY} ${CA_FOLDR}/kube-scheduler.service.master$i ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/kube-scheduler.service
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo mv kube-scheduler.service /etc/systemd/system/"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl daemon-reload; sudo systemctl enable kube-scheduler"
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo systemctl start kube-scheduler; sudo systemctl status kube-scheduler --no-pager"
+
+done
+
 }
-#provisioning
-#ca_config
+
+testing() {
+  #TODO: this does not work
+  echo "TESTING..."
+  kubectl --kubeconfig=./kube-proxy.kubeconfig get componentstatuses
+
+}
+
+
+provisioning
+ca_config
+etcd_bootstrap
 testing
