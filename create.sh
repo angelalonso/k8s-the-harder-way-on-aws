@@ -578,6 +578,34 @@ testing() {
   #TODO: this does not work
   echo "TESTING..."
   kubectl --kubeconfig=./kube-proxy.kubeconfig get componentstatuses
+  # TO CHECK:
+
+# VPCID="vpc-48a00e2e"
+# SUBNET_MASTER="subnet-6c61f537"
+# SUBNET_WORKER="subnet-1462f64f"
+# IGW="igw-052eb362"
+# RTB="rtb-cb201aad"
+# SG_MASTERS="sg-9c86f3e6"
+# SG_WORKERS="sg-e281f498"
+# MASTER_ID[1]="i-0eb4c17fe56f1f477"
+# MASTER_IP_INT[1]="10.4.1.249"
+# MASTER_IP_PUB[1]="54.244.40.171"
+# MASTER_ID[2]="i-0a6d8b87629edc87e"
+# MASTER_IP_INT[2]="10.4.1.197"
+# MASTER_IP_PUB[2]="34.209.137.20"
+# MASTER_ID[3]="i-0dea675dd2e97a79c"
+# MASTER_IP_INT[3]="10.4.1.36"
+# MASTER_IP_PUB[3]="34.209.204.49"
+# MASTERLIST=" i-01ba52a0f23bc54a7 i-0a293214a5802589c i-0c18fc197defd545b i-0eb4c17fe56f1f477 i-0a6d8b87629edc87e i-0dea675dd2e97a79c"
+# WORKER_ID[1]="i-01c454da7d562ac1a"
+# WORKER_IP_PUB[1]=""
+# WORKER_ID[2]="i-076098e6c00dbeee8"
+# WORKER_IP_PUB[2]=""
+# WORKER_ID[3]="i-0708f559bd5a09a31"
+# WORKER_IP_PUB[3]=""
+# WORKERLIST=" i-01c454da7d562ac1a i-076098e6c00dbeee8 i-0708f559bd5a09a31"
+# ELB_DNS="af-k8s-elb-1418462662.us-west-2.elb.amazonaws.com"
+
 
 }
 
