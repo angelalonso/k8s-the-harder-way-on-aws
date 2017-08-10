@@ -33,6 +33,8 @@ mkdir -p ${FOLDR}
 
 testing() {
   aws --profile=${AWSPROF} ec2 delete-key-pair --key-name ${STACK}-key
+  # subnets
+  # igw
 for i in $(seq -w $NR_MASTERS); do
   aws --profile=${AWSPROF} ec2 terminate-instances --instance-ids ${MASTER_ID[$i]}
 done
