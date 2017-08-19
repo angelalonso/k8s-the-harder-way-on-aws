@@ -10,11 +10,11 @@ AWSPROF="test-k8s" # Profile in your ~/.aws config file
 
 STACK="af-k8s"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
-CIDR="10.4.0.0/16"
+CLUSTER_CIDR="10.4.0.0/16"
 CIDR_MASTER="10.4.1.0/24"
 CIDR_WORKER="10.4.2.0/24"
 #TODO: Check what this is really used for
-K8S_DNS="10.32.0.1"
+K8S_DNS="10.32.0.10"
 
 PORT_SSH="22"
 # TODO: are these correct?
@@ -103,6 +103,7 @@ fi
 aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key | jq -r '.KeyMaterial' > ${SSHKEY}
 sudo chmod 0600 ${SSHKEY}
 
+MASTERLIST=""
 for i in $(seq -w $NR_MASTERS); do
   # Provision and tag the master
   MASTER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG_MASTERS} --subnet-id ${SUBNET_MASTER} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
@@ -118,13 +119,14 @@ done
 echo "MASTERLIST=\"${MASTERLIST}\"" >> ${CFG}
 
 
+WORKERLIST=""
 for i in $(seq -w $NR_WORKERS); do
   WORKER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG_WORKERS} --subnet-id ${SUBNET_WORKER} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
   WORKERLIST="${WORKERLIST} ${WORKER_ID[$i]}"
   echo "WORKER_ID[$i]=\"${WORKER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${WORKER_ID[$i]} --tags Key=Name,Value=${STACK}-worker$i
   # Get its Public IP
-  WORKER_IP_PUB[$i]=$(aws --profile=${AWSPROF} ec1 describe-instances --instance-id ${WORKER_ID[$i]} | jq -r '.Reservations[].Instances[].PublicIpAddress')
+  WORKER_IP_PUB[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${WORKER_ID[$i]} | jq -r '.Reservations[].Instances[].PublicIpAddress')
   echo "WORKER_IP_PUB[$i]=\"${WORKER_IP_PUB[$i]}\"" >> ${CFG}
 done
 echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
@@ -258,6 +260,7 @@ cfssl gencert \
 # Create the kubernetes server certificate
 K8S_PUBLIC_ADDRESS=${ELB_DNS}
 
+# TODO: is K8S_DNS the good one here? or 10.32.0.1 instead of 0.10?
 cat > ${CA_FOLDR}/kubernetes-csr.json <<EOF
 {
   "CN": "kubernetes",
@@ -523,7 +526,7 @@ Documentation=https://github.com/GoogleCloudPlatform/kubernetes
 ExecStart=/usr/bin/kube-controller-manager \\
   --address=0.0.0.0 \\
   --allocate-node-cidrs=true \\
-  --cluster-cidr=10.4.0.0/16 \\
+  --cluster-cidr=${CLUSTER_CIDR} \\
   --cluster-name=kubernetes \\
   --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem \\
   --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem \\
@@ -574,43 +577,191 @@ done
 
 }
 
-testing() {
+workers() {
   #TODO: this does not work
   echo "TESTING..."
   kubectl --kubeconfig=./kube-proxy.kubeconfig get componentstatuses
-  # TO CHECK:
 
-# VPCID="vpc-48a00e2e"
-# SUBNET_MASTER="subnet-6c61f537"
-# SUBNET_WORKER="subnet-1462f64f"
-# IGW="igw-052eb362"
-# RTB="rtb-cb201aad"
-# SG_MASTERS="sg-9c86f3e6"
-# SG_WORKERS="sg-e281f498"
-# MASTER_ID[1]="i-0eb4c17fe56f1f477"
-# MASTER_IP_INT[1]="10.4.1.249"
-# MASTER_IP_PUB[1]="54.244.40.171"
-# MASTER_ID[2]="i-0a6d8b87629edc87e"
-# MASTER_IP_INT[2]="10.4.1.197"
-# MASTER_IP_PUB[2]="34.209.137.20"
-# MASTER_ID[3]="i-0dea675dd2e97a79c"
-# MASTER_IP_INT[3]="10.4.1.36"
-# MASTER_IP_PUB[3]="34.209.204.49"
-# MASTERLIST=" i-01ba52a0f23bc54a7 i-0a293214a5802589c i-0c18fc197defd545b i-0eb4c17fe56f1f477 i-0a6d8b87629edc87e i-0dea675dd2e97a79c"
-# WORKER_ID[1]="i-01c454da7d562ac1a"
-# WORKER_IP_PUB[1]=""
-# WORKER_ID[2]="i-076098e6c00dbeee8"
-# WORKER_IP_PUB[2]=""
-# WORKER_ID[3]="i-0708f559bd5a09a31"
-# WORKER_IP_PUB[3]=""
-# WORKERLIST=" i-01c454da7d562ac1a i-076098e6c00dbeee8 i-0708f559bd5a09a31"
-# ELB_DNS="af-k8s-elb-1418462662.us-west-2.elb.amazonaws.com"
+# Bootstrapping Kubernetes Workers
+ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[1]} "kubectl create clusterrolebinding kubelet-bootstrap --clusterrole=system:node-bootstrapper --user=kubelet-bootstrap"
 
+for i in $(seq -w $NR_WORKERS); do
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mkdir -p /var/lib/{kubelet,kube-proxy,kubernetes}"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mkdir -p /var/run/kubernetes && sudo mv bootstrap.kubeconfig /var/lib/kubelet"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy && sudo mv ca.pem /var/lib/kubernetes"
+  # Install Docker
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://get.docker.com/builds/Linux/x86_64/docker-1.12.6.tgz"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "tar -xvf docker-1.12.6.tgz && sudo cp docker/docker* /usr/bin/"
+  # Create the Docker systemd unit file:
+cat > ${CA_FOLDR}/docker.service.worker$i <<EOF
+[Unit]
+Description=Docker Application Container Engine
+Documentation=http://docs.docker.io
+
+[Service]
+ExecStart=/usr/bin/docker daemon \\
+  --iptables=false \\
+  --ip-masq=false \\
+  --host=unix:///var/run/docker.sock \\
+  --log-level=error \\
+  --storage-driver=overlay
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  # Start the docker service:
+  scp -i ${SSHKEY} ${CA_FOLDR}/docker.service.worker$i ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/docker.service
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv docker.service /etc/systemd/system/docker.service"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl daemon-reload && sudo systemctl enable docker"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl start docker && sudo docker version"
+  # Install the kubelet
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mkdir -p /opt/cni"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/network-plugins/cni-amd64-0799f5732f2a11b329d9e3d51b9c8f2e3759f2ff.tar.gz"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo tar -xvf cni-amd64-0799f5732f2a11b329d9e3d51b9c8f2e3759f2ff.tar.gz -C /opt/cni"
+  # Download and install the Kubernetes worker binaries
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kubectl"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kube-proxy"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kubelet"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "chmod +x kubectl kube-proxy kubelet && sudo mv kubectl kube-proxy kubelet /usr/bin/"
+  # Create the kubelet systemd unit file:
+  API_SERVERS=$(cat bootstrap.kubeconfig | grep server | cut -d ':' -f2,3,4 | tr -d '[:space:]')
+cat > ${CA_FOLDER}/kubelet.service.worker$i <<EOF
+[Unit]
+Description=Kubernetes Kubelet
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/bin/kubelet \\
+  --api-servers=${API_SERVERS} \\
+  --allow-privileged=true \\
+  --cluster-dns=${K8S_DNS} \\
+  --cluster-domain=cluster.local \\
+  --container-runtime=docker \\
+  --experimental-bootstrap-kubeconfig=/var/lib/kubelet/bootstrap.kubeconfig \\
+  --network-plugin=kubenet \\
+  --kubeconfig=/var/lib/kubelet/kubeconfig \\
+  --serialize-image-pulls=false \\
+  --register-node=true \\
+  --tls-cert-file=/var/lib/kubelet/kubelet-client.crt \\
+  --tls-private-key-file=/var/lib/kubelet/kubelet-client.key \\
+  --cert-dir=/var/lib/kubelet \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  scp -i ${SSHKEY} ${CA_FOLDR}/kubelet.service.worker$i ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/kubelet.service
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv kubelet.service /etc/systemd/system/kubelet.service"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl daemon-reload && sudo systemctl enable kubelet"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl start kubelet && sudo systemctl status kubelet --no-pager"
+
+  # kube-proxy
+cat > kube-proxy.service.worker$1 <<EOF
+[Unit]
+Description=Kubernetes Kube Proxy
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+
+[Service]
+ExecStart=/usr/bin/kube-proxy \\
+  --cluster-cidr=${CLUSTER_CIDR} \\
+  --masquerade-all=true \\
+  --kubeconfig=/var/lib/kube-proxy/kube-proxy.kubeconfig \\
+  --proxy-mode=iptables \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  scp -i ${SSHKEY} ${CA_FOLDR}/kube-proxy.service.worker$i ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/kube-proxy.service
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv kube-proxy.service /etc/systemd/system/kube-proxy.service"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl daemon-reload && sudo systemctl enable kube-proxy"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl start kube-proxy && sudo systemctl status kube-proxy --no-pager"
+
+done
+
+# ssh into one of the masters and, from there, List and approve the pending certificate requests:
+ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[1]} "for i in $(kubectl get csr | grep -v NAME | cut -d' ' -f1)); do kubectl certificate approve $i; done"
+
+# Check that everything is fine
+kubectl get nodes
 
 }
 
+kubectl_config() {
+  echo
+# Configuring the Remote Access Kubernetes Client
+wget https://storage.googleapis.com/kubernetes-release/release/v1.7.0/bin/linux/amd64/kubectl
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin
 
-provisioning
-ca_config
-etcd_bootstrap
+# K8S_PUBLIC_ADDRESS=${ELB_DNS}
+# Build up the kubeconfig entry
+kubectl config set-cluster kubernetes-the-hard-way \
+  --certificate-authority=ca.pem \
+  --embed-certs=true \
+  --server=https://${K8S_PUBLIC_ADDRESS}:6443
+
+kubectl config set-credentials admin \
+  --client-certificate=admin.pem \
+  --client-key=admin-key.pem
+
+kubectl config set-context kubernetes-the-hard-way \
+  --cluster=kubernetes-the-hard-way \
+  --user=admin
+
+kubectl config use-context kubernetes-the-hard-way
+
+kubectl get componentstatuses
+kubectl get nodes
+
+}
+
+network_config(){
+ echo
+## Create Routes
+#TODO: find out which one is needed on AWS
+#kubectl get nodes \
+#  --output=jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address} {.spec.podCIDR} {"\n"}{end}'
+# aws --profile=${AWSPROF} ec2 create-route --route-table-id ${RTB} --destination-cidr-block 0.0.0.0/0 --gateway-id ${IGW}
+# gcloud compute routes create kubernetes-route-10-200-0-0-24 \
+#   --network kubernetes-the-hard-way \
+#   --next-hop-address 10.240.0.20 \
+#   --destination-range 10.200.0.0/24
+
+}
+
+dns_addon(){
+## Deploying the Cluster DNS Add-on
+kubectl create clusterrolebinding serviceaccounts-cluster-admin \
+  --clusterrole=cluster-admin \
+  --group=system:serviceaccounts
+
+kubectl create -f yaml/svc_kubedns.yaml
+kubectl --namespace=kube-system get svc
+
+# Create the `kubedns` deployment:
+kubectl create -f yaml/dply_kubedns.yaml
+kubectl --namespace=kube-system get pods
+
+}
+
+testing() {
+  echo
+}
+
+# provisioning
+# ca_config
+# etcd_bootstrap
+# workers
+# kubectl_config
+# network_config
+# dns_addon
 testing
