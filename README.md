@@ -384,9 +384,9 @@ This section will walk you through creating kubeconfig files that will be used t
 Each kubeconfig requires a Kubernetes master to connect to. To support H/A the IP address assigned to the load balancer sitting in front of the Kubernetes API servers will be used.
 
 #### Set the kubernetes Public Address
-Make sure you still have the EIP as an environment variable set:
+Make sure you still have the Public address from your ELB as an environment variable set:
 ```
-KUBERNETES_PUBLIC_ADDRESS="34.211.127.220"
+KUBERNETES_PUBLIC_ADDRESS="afonseca-k8s-elb-1913340698.us-west-2.elb.amazonaws.com"
 echo $KUBERNETES_PUBLIC_ADDRESS
 ```
 , where 34.211.127.220 is the IP we got on a previous step (see "Create the kubernetes server certificate")
@@ -741,6 +741,7 @@ kubectl get componentstatuses
 ...Bootstraping the ELB was done before, at provisioning time
 
 ## Bootstrapping Kubernetes Workers
+# TODO: Shorten this up, correct issues on script, test
 
 ### Why
 
@@ -920,10 +921,170 @@ ssh into one of the masters and, from there, List the pending certificate reques
 ```
 kubectl get csr
 ```
-
 --ERROR: kube-proxy not coming up kube-proxy[32624]: invalid configuration: default cluster has no server defined
 --ERROR: No certs arrived, no connection through 6443 I believe
 --ERROR: the EIP seems to be used for the ELB in the original case, we need to move to Route53 OR the ELB itself
+
+From that one of the masters, approve those pending certificate requests:
+```
+kubectl certificate approve csr-XXXXX
+```
+
+Then, from your Computer, run:
+```
+kubectl get nodes
+```
+
+## Configuring the Remote Access Kubernetes Client
+TODO: shorten and correct this, correct script, test
+
+Run the following from your Linux Computer to install eh kubectl client:
+
+```
+wget https://storage.googleapis.com/kubernetes-release/release/v1.7.0/bin/linux/amd64/kubectl
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin
+```
+
+Now configure the kubectl client to point to the Kubernetes API Server Frontend Load Balancer.
+
+Again, make sure you still have the Public address from your ELB as an environment variable set:
+```
+KUBERNETES_PUBLIC_ADDRESS="afonseca-k8s-elb-1913340698.us-west-2.elb.amazonaws.com"
+echo $KUBERNETES_PUBLIC_ADDRESS
+```
+Also be sure to locate the CA certificate created earlier.
+Since we are using self-signed TLS certs we need to trust the CA certificate so we can verify the remote API Servers.
+
+### Build up the kubeconfig entry
+
+```
+kubectl config set-cluster kubernetes-the-hard-way \
+  --certificate-authority=ca.pem \
+  --embed-certs=true \
+  --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443
+```
+
+```
+kubectl config set-credentials admin \
+  --client-certificate=admin.pem \
+  --client-key=admin-key.pem
+```
+
+```
+kubectl config set-context kubernetes-the-hard-way \
+  --cluster=kubernetes-the-hard-way \
+  --user=admin
+```
+
+```
+kubectl config use-context kubernetes-the-hard-way
+```
+
+At this point you should be able to connect securly to the remote API server:
+
+```
+kubectl get componentstatuses
+```
+```
+kubectl get nodes
+```
+
+## Managing the Container Network Routes
+TODO: correct this, correct script, test
+
+Now that each worker node is online we need to add routes to make sure that Pods running on different machines can talk to each other.
+In this lab we are not going to provision any overlay networks and instead rely on Layer 3 networking.
+That means we need to add routes to our router.
+
+### Container Subnets
+
+The IP addresses for each pod will be allocated from the `podCIDR` range assigned to each Kubernetes worker through the node registration process.
+The `podCIDR` will be allocated from the cluster cidr range as configured on the Kubernetes Controller Manager with the --cluster-cidr flag.
+
+Based on the above configuration each node will receive a `/24` subnet.
+
+```
+10.4.0.0/24
+10.4.1.0/24
+10.4.2.0/24
+...
+```
+
+### Get the Routing Table
+
+The first thing we need to do is gather the information required to populate the router table.
+We need the Internal IP address and Pod Subnet for each of the worker nodes.
+
+Use `kubectl` to print the `InternalIP` and `podCIDR` for each worker node, then create the route
+# TODO: loop through results, and look for the correct command on aws
+```
+kubectl get nodes \
+  --output=jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address} {.spec.podCIDR} {"\n"}{end}'
+
+gcloud compute routes create kubernetes-route-10-200-0-0-24 \
+  --network kubernetes-the-hard-way \
+  --next-hop-address 10.240.0.20 \
+  --destination-range 10.200.0.0/24
+```
+squeed>rktnetes:
+ROUTE_TABLE_ID=$(aws ec2 describe-route-tables \
+--filters "Name=tag:Name,Values=kubernetes" | \
+jq -r '.RouteTables[].RouteTableId')
+
+WORKER_0_INSTANCE_ID=$(aws ec2 describe-instances \
+--filters "Name=tag:Name,Values=worker0" | \
+jq -j '.Reservations[].Instances[].InstanceId')
+
+aws ec2 create-route \
+--route-table-id ${ROUTE_TABLE_ID} \
+--destination-cidr-block 10.200.0.0/24 \
+--instance-id ${WORKER_0_INSTANCE_ID}
+
+...and this for all three
+
+## Deploying the Cluster DNS Add-on
+TODO: correct this, test script
+
+The DNS add-on is required for every Kubernetes cluster. Without the DNS add-on the following things will not work:
+
+* DNS based service discovery
+* DNS lookups from containers running in pods
+
+### Cluster DNS Add-on
+
+```
+kubectl create clusterrolebinding serviceaccounts-cluster-admin \
+  --clusterrole=cluster-admin \
+  --group=system:serviceaccounts
+```
+
+Create the `kubedns` service:
+
+```
+kubectl create -f yaml/svc_kubedns.yaml
+kubectl --namespace=kube-system get svc
+```
+
+```
+NAME       CLUSTER-IP   EXTERNAL-IP   PORT(S)         AGE
+kube-dns   10.32.0.10   <none>        53/UDP,53/TCP   5s
+```
+
+Create the `kubedns` deployment:
+
+```
+kubectl create -f yaml/dply_kubedns.yaml
+kubectl --namespace=kube-system get pods
+```
+
+```
+NAME                       READY     STATUS    RESTARTS   AGE
+kube-dns-321336704-6749s   4/4       Running   0          10s
+```
+
+
+
 
 
 # NEXTUP
