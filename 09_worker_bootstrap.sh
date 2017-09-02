@@ -13,6 +13,8 @@ SSHKEY="$HOME/.ssh/$STACK-key.priv"
 CIDR_VPC="10.240.0.0/16"
 CIDR_SUBNET="10.240.0.0/24"
 CIDR_CLUSTER="10.200.0.0/16"
+#TODO: Check where this really comes from
+CIDR_POD="10.0.0.0/16"
 #TODO: Check what this is really used for
 K8S_DNS="10.32.0.10"
 
@@ -33,100 +35,58 @@ mkdir -p ${FOLDR}
 
 
 workers() {
-  #TODO: this does not work
   echo "CONFIGURING WORKERS"
-  kubectl --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig get componentstatuses
+  #TODO: this does not work
+# ERROR on this: Error from server (Forbidden): User "system:kube-proxy" cannot list componentstatuses at the cluster scope. (get componentstatuses)
+ # kubectl --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig get componentstatuses
 
-# Bootstrapping Kubernetes Workers
-ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[1]} "kubectl create clusterrolebinding kubelet-bootstrap --clusterrole=system:node-bootstrapper --user=kubelet-bootstrap"
+ # This was moved outside the lopp to avoid duplicated work
 
-for i in $(seq -w $NR_WORKERS); do
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mkdir -p /var/lib/{kubelet,kube-proxy,kubernetes}"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mkdir -p /var/run/kubernetes && sudo mv bootstrap.kubeconfig /var/lib/kubelet"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy && sudo mv ca.pem /var/lib/kubernetes"
-  # Install Docker
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://get.docker.com/builds/Linux/x86_64/docker-1.12.6.tgz"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "tar -xvf docker-1.12.6.tgz && sudo cp docker/docker* /usr/bin/"
-  # Create the Docker systemd unit file:
-cat > ${CA_FOLDR}/docker.service.worker$i <<EOF
+cat > ${CA_FOLDR}/10-bridge.conf <<EOF
+{
+    "cniVersion": "0.3.1",
+    "name": "bridge",
+    "type": "bridge",
+    "bridge": "cnio0",
+    "isGateway": true,
+    "ipMasq": true,
+    "ipam": {
+        "type": "host-local",
+        "ranges": [
+          [{"subnet": "${POD_CIDR}"}]
+        ],
+        "routes": [{"dst": "0.0.0.0/0"}]
+    }
+}
+EOF
+cat > ${CA_FOLDR}/99-loopback.conf <<EOF
+{
+    "cniVersion": "0.3.1",
+    "type": "loopback"
+}
+EOF
+cat > ${CA_FOLDR}/crio.service <<EOF
 [Unit]
-Description=Docker Application Container Engine
-Documentation=http://docs.docker.io
+Description=CRI-O daemon
+Documentation=https://github.com/kubernetes-incubator/cri-o
 
 [Service]
-ExecStart=/usr/bin/docker daemon \\
-  --iptables=false \\
-  --ip-masq=false \\
-  --host=unix:///var/run/docker.sock \\
-  --log-level=error \\
-  --storage-driver=overlay
-Restart=on-failure
-RestartSec=5
+ExecStart=/usr/local/bin/crio
+Restart=always
+RestartSec=10s
 
 [Install]
 WantedBy=multi-user.target
 EOF
-  # Start the docker service:
-  scp -i ${SSHKEY} ${CA_FOLDR}/docker.service.worker$i ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/docker.service
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv docker.service /etc/systemd/system/docker.service"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl daemon-reload && sudo systemctl enable docker"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl start docker && sudo docker version"
-  # Install the kubelet
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mkdir -p /opt/cni"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/network-plugins/cni-amd64-0799f5732f2a11b329d9e3d51b9c8f2e3759f2ff.tar.gz"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo tar -xvf cni-amd64-0799f5732f2a11b329d9e3d51b9c8f2e3759f2ff.tar.gz -C /opt/cni"
-  # Download and install the Kubernetes worker binaries
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kubectl"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kube-proxy"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kubelet"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "chmod +x kubectl kube-proxy kubelet && sudo mv kubectl kube-proxy kubelet /usr/bin/"
-  # Create the kubelet systemd unit file:
-  API_SERVERS=$(cat ${CA_FOLDR}/bootstrap.kubeconfig | grep server | cut -d ':' -f2,3,4 | tr -d '[:space:]')
-cat > ${CA_FOLDR}/kubelet.service.worker$i <<EOF
-[Unit]
-Description=Kubernetes Kubelet
-Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-After=docker.service
-Requires=docker.service
-
-[Service]
-ExecStart=/usr/bin/kubelet \\
-  --api-servers=${API_SERVERS} \\
-  --allow-privileged=true \\
-  --cluster-dns=${K8S_DNS} \\
-  --cluster-domain=cluster.local \\
-  --container-runtime=docker \\
-  --experimental-bootstrap-kubeconfig=/var/lib/kubelet/bootstrap.kubeconfig \\
-  --network-plugin=kubenet \\
-  --kubeconfig=/var/lib/kubelet/kubeconfig \\
-  --serialize-image-pulls=false \\
-  --register-node=true \\
-  --tls-cert-file=/var/lib/kubelet/kubelet-client.crt \\
-  --tls-private-key-file=/var/lib/kubelet/kubelet-client.key \\
-  --cert-dir=/var/lib/kubelet \\
-  --v=2
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  scp -i ${SSHKEY} ${CA_FOLDR}/kubelet.service.worker$i ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/kubelet.service
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv kubelet.service /etc/systemd/system/kubelet.service"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl daemon-reload && sudo systemctl enable kubelet"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl start kubelet && sudo systemctl status kubelet --no-pager"
-
-  # kube-proxy
-cat > ${CA_FOLDR}/kube-proxy.service.worker$i <<EOF
+cat > ${CA_FOLDR}/kube-proxy.service <<EOF
 [Unit]
 Description=Kubernetes Kube Proxy
 Documentation=https://github.com/GoogleCloudPlatform/kubernetes
 
 [Service]
-ExecStart=/usr/bin/kube-proxy \\
-  --cluster-cidr=${CLUSTER_CIDR} \\
-  --masquerade-all=true \\
-  --kubeconfig=/var/lib/kube-proxy/kube-proxy.kubeconfig \\
+ExecStart=/usr/local/bin/kube-proxy \\
+  --cluster-cidr=${CIDR_CLUSTER} \\
+  --kubeconfig=/var/lib/kube-proxy/kubeconfig \\
   --proxy-mode=iptables \\
   --v=2
 Restart=on-failure
@@ -135,82 +95,106 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-  scp -i ${SSHKEY} ${CA_FOLDR}/kube-proxy.service.worker$i ubuntu@${WORKER_IP_PUB[$i]}:/home/ubuntu/kube-proxy.service
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv kube-proxy.service /etc/systemd/system/kube-proxy.service"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl daemon-reload && sudo systemctl enable kube-proxy"
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl start kube-proxy && sudo systemctl status kube-proxy --no-pager"
 
+for i in $(seq -w $NR_WORKERS); do
+  # Install the cri-o OS Dependencies
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo add-apt-repository -y ppa:alexlarsson/flatpak && \
+    sudo apt-get update && \
+    sudo apt-get install -y socat libgpgme11 libostree-1-1"
+
+  # download and install worker binaries
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget -q --show-progress --https-only --timestamping \
+    https://github.com/containernetworking/plugins/releases/download/v0.6.0/cni-plugins-amd64-v0.6.0.tgz \
+    https://github.com/opencontainers/runc/releases/download/v1.0.0-rc4/runc.amd64 \
+    https://storage.googleapis.com/kubernetes-the-hard-way/crio-amd64-v1.0.0-beta.0.tar.gz \
+    https://storage.googleapis.com/kubernetes-release/release/v1.7.4/bin/linux/amd64/kubectl \
+    https://storage.googleapis.com/kubernetes-release/release/v1.7.4/bin/linux/amd64/kube-proxy \
+    https://storage.googleapis.com/kubernetes-release/release/v1.7.4/bin/linux/amd64/kubelet"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mkdir -p \
+    /etc/containers \
+    /etc/cni/net.d \
+    /etc/crio \
+    /opt/cni/bin \
+    /usr/local/libexec/crio \
+    /var/lib/kubelet \
+    /var/lib/kube-proxy \
+    /var/lib/kubernetes \
+    /var/run/kubernetes"
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo tar -xvf cni-plugins-amd64-v0.6.0.tgz -C /opt/cni/bin/ && \
+    tar -xvf crio-amd64-v1.0.0-beta.0.tar.gz && \
+    chmod +x kubectl kube-proxy kubelet runc.amd64 && \
+    sudo mv runc.amd64 /usr/local/bin/runc && \
+    sudo mv crio crioctl kpod kubectl kube-proxy kubelet /usr/local/bin/ && \
+    sudo mv conmon pause /usr/local/libexec/crio/"
+
+  # Configure CNI networking
+  scp -i ${SSHKEY} ${CA_FOLDR}/10-bridge.conf ${CA_FOLDR}/99-loopback.conf ${CA_FOLDR}/crio.service ubuntu@${WORKER_IP_PUB[$i]}:~/
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv 10-bridge.conf 99-loopback.conf /etc/cni/net.d/"
+
+  # Configure the CRI-O Container Runtime
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv crio.conf seccomp.json /etc/crio/ && \
+    sudo mv policy.json /etc/containers/"
+
+  # Configure the kubelet
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv worker${i}-key.pem worker${i}.pem /var/lib/kubelet/ && \
+    sudo mv worker${i}.kubeconfig /var/lib/kubelet/kubeconfig && \
+    sudo mv ca.pem /var/lib/kubernetes/"
+
+  cat > ${CA_FOLDR}/kubelet.service.worker${i} <<EOF
+[Unit]
+Description=Kubernetes Kubelet
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=crio.service
+Requires=crio.service
+
+[Service]
+ExecStart=/usr/local/bin/kubelet \\
+  --allow-privileged=true \\
+  --cluster-dns=10.32.0.10 \\
+  --cluster-domain=cluster.local \\
+  --container-runtime=remote \\
+  --container-runtime-endpoint=unix:///var/run/crio.sock \\
+  --enable-custom-metrics \\
+  --image-pull-progress-deadline=2m \\
+  --image-service-endpoint=unix:///var/run/crio.sock \\
+  --kubeconfig=/var/lib/kubelet/kubeconfig \\
+  --network-plugin=cni \\
+  --pod-cidr=${POD_CIDR} \\
+  --register-node=true \\
+  --require-kubeconfig \\
+  --runtime-request-timeout=10m \\
+  --tls-cert-file=/var/lib/kubelet/worker${i}.pem \\
+  --tls-private-key-file=/var/lib/kubelet/worker${i}-key.pem \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  scp -i ${SSHKEY} ${CA_FOLDR}/kubelet.service.worker${i} ubuntu@${WORKER_IP_PUB[$i]}:~/kubelet.service
+
+  #Configure the Kubernetes Proxy
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy/kubeconfig"
+
+  scp -i ${SSHKEY} ${CA_FOLDR}/kube-proxy.service ubuntu@${WORKER_IP_PUB[$i]}:~/
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv crio.service kubelet.service kube-proxy.service /etc/systemd/system/ && \
+    sudo systemctl daemon-reload && \
+    sudo systemctl enable crio kubelet kube-proxy && \
+    sudo systemctl start crio kubelet kube-proxy"
 done
 
-# ssh into one of the masters and, from there, List and approve the pending certificate requests:
-ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[1]} "for i in $(kubectl get csr | grep -v NAME | cut -d' ' -f1); do kubectl certificate approve $i; done"
+for i in $(seq -w $NR_MASTERS); do
+  #TODO: ERROR: his command gets no resources
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "kubectl get nodes"
 
-# Check that everything is fine
-kubectl get nodes
-
+done
 }
 
-kubectl_config() {
-  echo
-# Configuring the Remote Access Kubernetes Client
-wget https://storage.googleapis.com/kubernetes-release/release/v1.7.0/bin/linux/amd64/kubectl
-chmod +x kubectl
-sudo mv kubectl /usr/local/bin
-
-# K8S_PUBLIC_ADDRESS=${ELB_DNS}
-# Build up the kubeconfig entry
-kubectl config set-cluster kubernetes-the-hard-way \
-  --certificate-authority=ca.pem \
-  --embed-certs=true \
-  --server=https://${K8S_PUBLIC_ADDRESS}:6443
-
-kubectl config set-credentials admin \
-  --client-certificate=admin.pem \
-  --client-key=admin-key.pem
-
-kubectl config set-context kubernetes-the-hard-way \
-  --cluster=kubernetes-the-hard-way \
-  --user=admin
-
-kubectl config use-context kubernetes-the-hard-way
-
-kubectl get componentstatuses
-kubectl get nodes
-
-}
-
-network_config(){
- echo
-## Create Routes
-#TODO: find out which one is needed on AWS
-#kubectl get nodes \
-#  --output=jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address} {.spec.podCIDR} {"\n"}{end}'
-# aws --profile=${AWSPROF} ec2 create-route --route-table-id ${RTB} --destination-cidr-block 0.0.0.0/0 --gateway-id ${IGW}
-# gcloud compute routes create kubernetes-route-10-200-0-0-24 \
-#   --network kubernetes-the-hard-way \
-#   --next-hop-address 10.240.0.20 \
-#   --destination-range 10.200.0.0/24
-
-}
-
-dns_addon(){
-## Deploying the Cluster DNS Add-on
-kubectl create clusterrolebinding serviceaccounts-cluster-admin \
-  --clusterrole=cluster-admin \
-  --group=system:serviceaccounts
-
-kubectl create -f yaml/svc_kubedns.yaml
-kubectl --namespace=kube-system get svc
-
-# Create the `kubedns` deployment:
-kubectl create -f yaml/dply_kubedns.yaml
-kubectl --namespace=kube-system get pods
-
-}
 
 testing() {
   echo
   kubectl --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig get componentstatuses
 }
-#workers
-testing
+workers
+#testing
