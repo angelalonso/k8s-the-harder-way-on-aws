@@ -13,8 +13,6 @@ SSHKEY="$HOME/.ssh/$STACK-key.priv"
 CIDR_VPC="10.240.0.0/16"
 CIDR_SUBNET="10.240.0.0/24"
 CIDR_OTHER="10.200.0.0/16"
-CIDR_MASTER="10.4.1.0/24"
-CIDR_WORKER="10.4.2.0/24"
 #TODO: Check what this is really used for
 K8S_DNS="10.32.0.10"
 
@@ -67,17 +65,8 @@ echo "SG=\"${SG}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${SG} --tags Key=Name,Value=${STACK}-sg
 
 # Open ports
-# Internal Communication across all protocols
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 0-65535 --protocol tcp --cidr ${CIDR_SUBNET}
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 0-65535 --protocol udp --cidr ${CIDR_SUBNET}
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port -1 --protocol icmp --cidr ${CIDR_SUBNET}
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 0-65535 --protocol tcp --cidr ${CIDR_OTHER}
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 0-65535 --protocol udp --cidr ${CIDR_OTHER}
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port -1 --protocol icmp --cidr ${CIDR_OTHER}
-# External SSH ICMP and HTTPS
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 22 --protocol tcp --cidr 0.0.0.0/0
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 6443 --protocol tcp --cidr 0.0.0.0/0
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port -1 --protocol icmp --cidr 0.0.0.0/0
+# TODO: investigate if this works or is even needed
+# The ELB is a dependency even before we start.
 # GCloud has an IP Range for LB health checks. AWS doesnt, so we create the LB already before the firewall rule
 # We need an IGW before creating the ELB
 # Create and attach IGW
@@ -85,6 +74,8 @@ IGW=$(aws --profile=${AWSPROF} ec2 create-internet-gateway | jq -r '.InternetGat
 echo "IGW=\"${IGW}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${IGW} --tags Key=Name,Value=${STACK}-internet-gateway
 aws --profile=${AWSPROF} ec2 attach-internet-gateway --internet-gateway-id ${IGW} --vpc-id ${VPCID}
+# Tell the Route Table to use the IGW to get to the world
+aws --profile=${AWSPROF} ec2 create-route --route-table-id ${RTB} --destination-cidr-block 0.0.0.0/0 --gateway-id ${IGW}
 # Create the main ELB for K8s
 ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET} | jq -r '.DNSName')
 ELB=$(aws --profile=${AWSPROF} elb describe-load-balancers | jq -r '[ .LoadBalancerDescriptions[] | select( .DNSName | contains("'${ELB_DNS}'")) ] | .[].LoadBalancerName' )
@@ -93,6 +84,15 @@ echo "ELB_DNS=\"${ELB_DNS}\"" >> ${CFG}
 aws --profile=${AWSPROF} elb apply-security-groups-to-load-balancer --load-balancer-name ${STACK}-elb --security-groups ${SG}
 aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK}-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
 
+# TODO: Is this needed for the ELB?
+#aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 8080 --protocol tcp --cidr ${CIDR_SUBNET}
+# Internal Communication across all protocols
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_SUBNET}
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_OTHER}
+# External SSH ICMP and HTTPS
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 22 --protocol tcp --cidr 0.0.0.0/0
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 6443 --protocol tcp --cidr 0.0.0.0/0
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port -1 --protocol icmp --cidr 0.0.0.0/0
 # Public IP address
 # 3x controllers
 ## Before we create machines we need a KEYPAIR
@@ -111,7 +111,7 @@ for i in $(seq -w $NR_MASTERS); do
   MASTERLIST="${MASTERLIST} ${MASTER_ID[$i]}"
   echo "MASTER_ID[$i]=\"${MASTER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${MASTER_ID[$i]} --tags Key=Name,Value=${STACK}-master$i
-  # Get its Internal and its Public IPs
+  # Get its Internal IPs
   MASTER_IP_INT[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${MASTER_ID[$i]} | jq -r '.Reservations[].Instances[].PrivateIpAddress')
   echo "MASTER_IP_INT[$i]=\"${MASTER_IP_INT[$i]}\"" >> ${CFG}
   MASTER_IP_PUB[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${MASTER_ID[$i]} | jq -r '.Reservations[].Instances[].PublicIpAddress')
@@ -128,6 +128,9 @@ for i in $(seq -w $NR_WORKERS); do
   WORKERLIST="${WORKERLIST} ${WORKER_ID[$i]}"
   echo "WORKER_ID[$i]=\"${WORKER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${WORKER_ID[$i]} --tags Key=Name,Value=${STACK}-worker$i
+  # Get its Internal IPs
+  WORKER_IP_INT[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${WORKER_ID[$i]} | jq -r '.Reservations[].Instances[].PrivateIpAddress')
+  echo "WORKER_IP_INT[$i]=\"${WORKER_IP_INT[$i]}\"" >> ${CFG}
   # Get its Public IP
   WORKER_IP_PUB[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${WORKER_ID[$i]} | jq -r '.Reservations[].Instances[].PublicIpAddress')
   echo "WORKER_IP_PUB[$i]=\"${WORKER_IP_PUB[$i]}\"" >> ${CFG}
@@ -139,6 +142,7 @@ echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
 
 testing() {
   echo TESTING!
+
 
 }
 

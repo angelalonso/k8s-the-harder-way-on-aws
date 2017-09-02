@@ -39,7 +39,7 @@ cp $CFG $CFG.prev 2>/dev/null
 echo > $CFG
 
 # Create and tag VPC
-VPCID=$(aws --profile=${AWSPROF} ec2 create-vpc --cidr-block ${CIDR} | jq -r '.Vpc.VpcId')
+VPCID=$(aws --profile=${AWSPROF} ec2 create-vpc --cidr-block ${CLUSTER_CIDR} | jq -r '.Vpc.VpcId')
 echo "VPCID=\"${VPCID}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${VPCID} --tags Key=Name,Value=${STACK}-vpc
 
@@ -95,13 +95,12 @@ aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG_MA
 
 # Provision the machines
 if [ -f  ${SSHKEY} ]; then
-  cp ${SSHKEY} ${SSHKEY}.old
+  mv ${SSHKEY} ${SSHKEY}.old
   echo "PREVIOUS SSH KEY exists, saved on ${SSHKEY}.old "
-else
-  touch ${SSHKEY}
 fi
-aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key | jq -r '.KeyMaterial' > ${SSHKEY}
-sudo chmod 0600 ${SSHKEY}
+touch ${SSHKEY}
+chmod 600 ${SSHKEY}
+aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key | jq -r '.KeyMaterial' >> ${SSHKEY}
 
 MASTERLIST=""
 for i in $(seq -w $NR_MASTERS); do
@@ -133,6 +132,9 @@ echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
 
 # Create the main ELB for K8s
 ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET_MASTER} | jq -r '.DNSName')
+#TODO: read ELBDNS into this command
+ELB=$(aws --profile=${AWSPROF} elb describe-load-balancers | jq -r '[ .LoadBalancerDescriptions[] | select( .DNSName | contains("'${ELB_DNS}'")) ] | .[].LoadBalancerName' )
+echo "ELB=\"${ELB}\"" >> ${CFG}
 echo "ELB_DNS=\"${ELB_DNS}\"" >> ${CFG}
 aws --profile=${AWSPROF} elb apply-security-groups-to-load-balancer --load-balancer-name ${STACK}-elb --security-groups ${SG_MASTERS} ${SG_WORKERS}
 aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK}-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
@@ -302,7 +304,9 @@ cfssl gencert \
 
 # Distribute the TLS certificates
 # TODO: check that all files are stored in the same folder(currently it is not)
+# TODO: avoid host checking with -o StrictHostKeyChecking=no
 for i in $(seq -w $NR_MASTERS); do
+
   scp -i ${SSHKEY} ${CA_FOLDR}/ca.pem ${CA_FOLDR}/ca-key.pem kubernetes-key.pem kubernetes.pem ubuntu@${MASTER_IP_PUB[$i]}:/home/ubuntu/
 done
 
@@ -336,38 +340,38 @@ kubectl config set-cluster kubernetes-the-hard-way \
   --certificate-authority=${CA_FOLDR}/ca.pem \
   --embed-certs=true \
   --server=https://${K8S_PUBLIC_ADDRESS}:6443 \
-  --kubeconfig=bootstrap.kubeconfig
+  --kubeconfig=${CA_FOLDR}/bootstrap.kubeconfig
 
 kubectl config set-credentials kubelet-bootstrap \
   --token=${BOOTSTRAP_TOKEN} \
-  --kubeconfig=bootstrap.kubeconfig
+  --kubeconfig=${CA_FOLDR}/bootstrap.kubeconfig
 
 kubectl config set-context default \
   --cluster=kubernetes-the-hard-way \
   --user=kubelet-bootstrap \
-  --kubeconfig=bootstrap.kubeconfig
+  --kubeconfig=${CA_FOLDR}/bootstrap.kubeconfig
 
-kubectl config use-context default --kubeconfig=bootstrap.kubeconfig
+kubectl config use-context default --kubeconfig=${CA_FOLDR}/bootstrap.kubeconfig
 
 # Create the kube-proxy kubeconfig
 kubectl config set-cluster kubernetes-the-hard-way \
   --certificate-authority=${CA_FOLDR}/ca.pem \
   --embed-certs=true \
   --server=https://${K8S_PUBLIC_ADDRESS}:6443 \
-  --kubeconfig=kube-proxy.kubeconfig
+  --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig
 
 kubectl config set-credentials kube-proxy \
   --client-certificate=${CA_FOLDR}/kube-proxy.pem \
   --client-key=${CA_FOLDR}/kube-proxy-key.pem \
   --embed-certs=true \
-  --kubeconfig=kube-proxy.kubeconfig
+  --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig
 
 kubectl config set-context default \
   --cluster=kubernetes-the-hard-way \
   --user=kube-proxy \
-  --kubeconfig=kube-proxy.kubeconfig
+  --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig
 
-kubectl config use-context default --kubeconfig=kube-proxy.kubeconfig
+kubectl config use-context default --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig
 
 # Distribute the client kubeconfig files
 for i in $(seq -w $NR_WORKERS); do
@@ -580,7 +584,7 @@ done
 workers() {
   #TODO: this does not work
   echo "TESTING..."
-  kubectl --kubeconfig=./kube-proxy.kubeconfig get componentstatuses
+  kubectl --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig get componentstatuses
 
 # Bootstrapping Kubernetes Workers
 ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[1]} "kubectl create clusterrolebinding kubelet-bootstrap --clusterrole=system:node-bootstrapper --user=kubelet-bootstrap"
@@ -626,8 +630,8 @@ EOF
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "wget https://storage.googleapis.com/kubernetes-release/release/v1.6.1/bin/linux/amd64/kubelet"
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "chmod +x kubectl kube-proxy kubelet && sudo mv kubectl kube-proxy kubelet /usr/bin/"
   # Create the kubelet systemd unit file:
-  API_SERVERS=$(cat bootstrap.kubeconfig | grep server | cut -d ':' -f2,3,4 | tr -d '[:space:]')
-cat > ${CA_FOLDER}/kubelet.service.worker$i <<EOF
+  API_SERVERS=$(cat ${CA_FOLDR}/bootstrap.kubeconfig | grep server | cut -d ':' -f2,3,4 | tr -d '[:space:]')
+cat > ${CA_FOLDR}/kubelet.service.worker$i <<EOF
 [Unit]
 Description=Kubernetes Kubelet
 Documentation=https://github.com/GoogleCloudPlatform/kubernetes
@@ -662,7 +666,7 @@ EOF
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo systemctl start kubelet && sudo systemctl status kubelet --no-pager"
 
   # kube-proxy
-cat > kube-proxy.service.worker$1 <<EOF
+cat > ${CA_FOLDR}/kube-proxy.service.worker$i <<EOF
 [Unit]
 Description=Kubernetes Kube Proxy
 Documentation=https://github.com/GoogleCloudPlatform/kubernetes
@@ -688,7 +692,7 @@ EOF
 done
 
 # ssh into one of the masters and, from there, List and approve the pending certificate requests:
-ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[1]} "for i in $(kubectl get csr | grep -v NAME | cut -d' ' -f1)); do kubectl certificate approve $i; done"
+ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[1]} "for i in $(kubectl get csr | grep -v NAME | cut -d' ' -f1); do kubectl certificate approve $i; done"
 
 # Check that everything is fine
 kubectl get nodes
@@ -757,11 +761,12 @@ testing() {
   echo
 }
 
-# provisioning
-# ca_config
-# etcd_bootstrap
-# workers
+provisioning
+ca_config
+etcd_bootstrap
+# ERROR
+#workers
 # kubectl_config
 # network_config
 # dns_addon
-testing
+#oesting

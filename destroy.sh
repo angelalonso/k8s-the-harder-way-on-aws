@@ -31,17 +31,36 @@ mkdir -p ${FOLDR}
 
 . ${CFG}
 
-testing() {
+delete_all() {
   aws --profile=${AWSPROF} ec2 delete-key-pair --key-name ${STACK}-key
   # subnets
   # igw
-for i in $(seq -w $NR_MASTERS); do
-  aws --profile=${AWSPROF} ec2 terminate-instances --instance-ids ${MASTER_ID[$i]}
-done
-for i in $(seq -w $NR_WORKERS); do
-  aws --profile=${AWSPROF} ec2 terminate-instances --instance-ids ${WORKER_ID[$i]}
-done
+  for i in $(seq -w $NR_MASTERS); do
+    aws --profile=${AWSPROF} ec2 terminate-instances --instance-ids ${MASTER_ID[$i]}
+  done
+  for i in $(seq -w $NR_WORKERS); do
+    aws --profile=${AWSPROF} ec2 terminate-instances --instance-ids ${WORKER_ID[$i]}
+  done
+  # TODO: wait until instances are gone
+  aws --profile=${AWSPROF} elb delete-load-balancer --load-balancer-name ${ELB}
+  aws --profile=${AWSPROF} ec2 delete-route-table --route-table-id ${RTB}
+  # TODO: search the ingress rules, then automatically revoke all
+  aws --profile=${AWSPROF} ec2 revoke-security-group-ingress --group-id ${SG_MASTERS} --port 0-65535 --protocol tcp --source-group ${SG_WORKERS}
+  aws --profile=${AWSPROF} ec2 revoke-security-group-ingress --group-id ${SG_MASTERS} --port ${PORT_SSH} --protocol tcp --cidr ${MYIP}/32
+  aws --profile=${AWSPROF} ec2 revoke-security-group-ingress --group-id ${SG_WORKERS} --port 0-65535 --protocol tcp --source-group ${SG_MASTERS}
+  aws --profile=${AWSPROF} ec2 revoke-security-group-ingress --group-id ${SG_WORKERS} --port ${PORT_SSH} --protocol tcp --cidr ${MYIP}/32
+  aws --profile=${AWSPROF} ec2 revoke-security-group-ingress --group-id ${SG_MASTERS} --port ${PORT_ETCD} --protocol tcp --source-group ${SG_MASTERS}
+  aws --profile=${AWSPROF} ec2 revoke-security-group-ingress --group-id ${SG_MASTERS} --port ${PORT_ETCDCTL} --protocol tcp --source-group ${SG_MASTERS}
+  aws --profile=${AWSPROF} ec2 revoke-security-group-ingress --group-id ${SG_MASTERS} --port 8080 --protocol tcp --source-group ${SG_MASTERS}
+  aws --profile=${AWSPROF} ec2 revoke-security-group-ingress --group-id ${SG_MASTERS} --port 6443 --protocol tcp --cidr ${MYIP}/32
+
+  aws --profile=${AWSPROF} ec2 delete-security-group --group-id ${SG_MASTERS}
+  aws --profile=${AWSPROF} ec2 delete-security-group --group-id ${SG_WORKERS}
+  aws --profile=${AWSPROF} ec2 detach-internet-gateway --internet-gateway-id ${IGW} --vpc-id ${VPCID}
+  aws --profile=${AWSPROF} ec2 delete-internet-gateway --internet-gateway-id ${IGW}
+  aws --profile=${AWSPROF} ec2 delete-subnet --subnet-id ${SUBNET_MASTER}
+  aws --profile=${AWSPROF} ec2 delete-subnet --subnet-id ${SUBNET_WORKER}
   aws --profile=${AWSPROF} ec2 delete-vpc --vpc-id ${VPCID}
 }
 
-testing
+delete_all
