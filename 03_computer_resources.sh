@@ -12,7 +12,7 @@ STACK="af-k8s"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
 CIDR_VPC="10.240.0.0/16"
 CIDR_SUBNET="10.240.0.0/24"
-CIDR_OTHER="10.200.0.0/16"
+CIDR_CLUSTER="10.200.0.0/16"
 #TODO: Check what this is really used for
 K8S_DNS="10.32.0.10"
 
@@ -88,7 +88,7 @@ aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK
 #aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 8080 --protocol tcp --cidr ${CIDR_SUBNET}
 # Internal Communication across all protocols
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_SUBNET}
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_OTHER}
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_CLUSTER}
 # External SSH ICMP and HTTPS
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 22 --protocol tcp --cidr 0.0.0.0/0
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 6443 --protocol tcp --cidr 0.0.0.0/0
@@ -142,9 +142,12 @@ echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
 
 testing() {
   echo TESTING!
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port ${PORT_ETCD} --protocol tcp --source-group ${SG}
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port ${PORT_ETCDCTL} --protocol tcp --source-group ${SG}
+
 
 
 }
 
-provisioning
-#testing
+#provisioning
+testing

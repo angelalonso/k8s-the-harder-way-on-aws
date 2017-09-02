@@ -10,9 +10,9 @@ AWSPROF="test-k8s" # Profile in your ~/.aws config file
 
 STACK="af-k8s"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
-CLUSTER_CIDR="10.4.0.0/16"
-CIDR_MASTER="10.4.1.0/24"
-CIDR_WORKER="10.4.2.0/24"
+CIDR_VPC="10.240.0.0/16"
+CIDR_SUBNET="10.240.0.0/24"
+CIDR_CLUSTER="10.200.0.0/16"
 #TODO: Check what this is really used for
 K8S_DNS="10.32.0.10"
 
