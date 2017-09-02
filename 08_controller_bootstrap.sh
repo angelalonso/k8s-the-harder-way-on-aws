@@ -34,6 +34,7 @@ mkdir -p ${FOLDR}
 
 ctrl_bootstrap() {
 # Provision the K8s control plane
+ echo "CONFIGURING MASTERS!"
 
 for i in $(seq -w $NR_MASTERS); do
   # Download and install binaries

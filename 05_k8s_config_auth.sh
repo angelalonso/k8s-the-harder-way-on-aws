@@ -41,7 +41,7 @@ for i in $(seq -w $NR_WORKERS); do
   kubectl config set-cluster kubernetes-the-hard-way \
     --certificate-authority=${CA_FOLDR}/ca.pem \
     --embed-certs=true \
-    --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443 \
+    --server=https://${K8S_PUBLIC_ADDRESS}:6443 \
     --kubeconfig=${CA_FOLDR}/worker${i}.kubeconfig
 
   kubectl config set-credentials system:node:worker${i} \
@@ -62,7 +62,7 @@ done
 kubectl config set-cluster kubernetes-the-hard-way \
   --certificate-authority=${CA_FOLDR}/ca.pem \
   --embed-certs=true \
-  --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443 \
+  --server=https://${K8S_PUBLIC_ADDRESS}:6443 \
   --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig
 kubectl config set-credentials kube-proxy \
   --client-certificate=${CA_FOLDR}/kube-proxy.pem \

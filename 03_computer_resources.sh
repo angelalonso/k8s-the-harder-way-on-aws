@@ -142,12 +142,8 @@ echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
 
 testing() {
   echo TESTING!
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port ${PORT_ETCD} --protocol tcp --source-group ${SG}
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port ${PORT_ETCDCTL} --protocol tcp --source-group ${SG}
-
-
 
 }
 
-#provisioning
-testing
+provisioning
+#testing

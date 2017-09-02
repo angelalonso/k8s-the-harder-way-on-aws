@@ -55,6 +55,8 @@ cfssl version
 
 # Set up a Certificate Authority
 # Create a CA configuration file:
+# TODO: ERROR on  curl https://af-k8s-elb-1605280952.us-west-2.elb.amazonaws.com:6443/version
+#  server certificate verification failed. CAfile: /etc/ssl/certs/ca-certificates.crt CRLfile: none
 cat > ${CA_FOLDR}/ca-config.json <<EOF
 {
   "signing": {
@@ -213,7 +215,7 @@ cfssl gencert \
   -ca=${CA_FOLDR}/ca.pem \
   -ca-key=${CA_FOLDR}/ca-key.pem \
   -config=${CA_FOLDR}/ca-config.json \
-  -hostname=10.32.0.1,${MASTER_IP_INT_LIST},${KUBERNETES_PUBLIC_ADDRESS},127.0.0.1,kubernetes.default \
+  -hostname=10.32.0.1,${MASTER_IP_INT_LIST},${K8S_PUBLIC_ADDRESS},127.0.0.1,kubernetes.default \
   -profile=kubernetes \
   ${CA_FOLDR}/kubernetes-csr.json | cfssljson -bare kubernetes
 
