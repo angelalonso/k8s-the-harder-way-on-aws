@@ -14,7 +14,7 @@ CIDR_VPC="10.240.0.0/16"
 CIDR_SUBNET="10.240.0.0/24"
 CIDR_CLUSTER="10.200.0.0/16"
 #TODO: Check where this really comes from
-CIDR_POD="10.0.0.0/16"
+CIDR_POD="10.200.0.0/16"
 #TODO: Check what this is really used for
 K8S_DNS="10.32.0.10"
 
@@ -53,7 +53,7 @@ cat > ${CA_FOLDR}/10-bridge.conf <<EOF
     "ipam": {
         "type": "host-local",
         "ranges": [
-          [{"subnet": "${POD_CIDR}"}]
+          [{"subnet": "${CIDR_POD}"}]
         ],
         "routes": [{"dst": "0.0.0.0/0"}]
     }
@@ -120,6 +120,7 @@ for i in $(seq -w $NR_WORKERS); do
     /var/lib/kube-proxy \
     /var/lib/kubernetes \
     /var/run/kubernetes"
+  # NOTE: I had to manually re-install runc on one of the nodes. It segfaulted but the others didnt (?)
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo tar -xvf cni-plugins-amd64-v0.6.0.tgz -C /opt/cni/bin/ && \
     tar -xvf crio-amd64-v1.0.0-beta.0.tar.gz && \
     chmod +x kubectl kube-proxy kubelet runc.amd64 && \
@@ -159,7 +160,7 @@ ExecStart=/usr/local/bin/kubelet \\
   --image-service-endpoint=unix:///var/run/crio.sock \\
   --kubeconfig=/var/lib/kubelet/kubeconfig \\
   --network-plugin=cni \\
-  --pod-cidr=${POD_CIDR} \\
+  --pod-cidr=${CIDR_POD} \\
   --register-node=true \\
   --require-kubeconfig \\
   --runtime-request-timeout=10m \\
@@ -178,9 +179,11 @@ EOF
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy/kubeconfig"
 
   scp -i ${SSHKEY} ${CA_FOLDR}/kube-proxy.service ubuntu@${WORKER_IP_PUB[$i]}:~/
+  # NOTE: hostname MUST be workerX for the node to register successfully
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv crio.service kubelet.service kube-proxy.service /etc/systemd/system/ && \
     sudo systemctl daemon-reload && \
     sudo systemctl enable crio kubelet kube-proxy && \
+    sudo hostname worker${i} && \
     sudo systemctl start crio kubelet kube-proxy"
 done
 
