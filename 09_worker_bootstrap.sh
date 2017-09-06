@@ -13,8 +13,6 @@ SSHKEY="$HOME/.ssh/$STACK-key.priv"
 CIDR_VPC="10.240.0.0/16"
 CIDR_SUBNET="10.240.0.0/24"
 CIDR_CLUSTER="10.200.0.0/16"
-#TODO: Check where this really comes from
-CIDR_POD="10.200.0.0/16"
 #TODO: Check what this is really used for
 K8S_DNS="10.32.0.10"
 
@@ -42,23 +40,6 @@ workers() {
 
  # This was moved outside the lopp to avoid duplicated work
 
-cat > ${CA_FOLDR}/10-bridge.conf <<EOF
-{
-    "cniVersion": "0.3.1",
-    "name": "bridge",
-    "type": "bridge",
-    "bridge": "cnio0",
-    "isGateway": true,
-    "ipMasq": true,
-    "ipam": {
-        "type": "host-local",
-        "ranges": [
-          [{"subnet": "${CIDR_POD}"}]
-        ],
-        "routes": [{"dst": "0.0.0.0/0"}]
-    }
-}
-EOF
 cat > ${CA_FOLDR}/99-loopback.conf <<EOF
 {
     "cniVersion": "0.3.1",
@@ -128,9 +109,28 @@ for i in $(seq -w $NR_WORKERS); do
     sudo mv crio crioctl kpod kubectl kube-proxy kubelet /usr/local/bin/ && \
     sudo mv conmon pause /usr/local/libexec/crio/"
 
+#TODO: Check where this really is used for
+  CIDR_POD="10.200.${i}.0/16"
+  cat > ${CA_FOLDR}/10-bridge.conf.worker${i} <<EOF
+{
+    "cniVersion": "0.3.1",
+    "name": "bridge",
+    "type": "bridge",
+    "bridge": "cnio0",
+    "isGateway": true,
+    "ipMasq": true,
+    "ipam": {
+        "type": "host-local",
+        "ranges": [
+          [{"subnet": "${CIDR_POD}"}]
+        ],
+        "routes": [{"dst": "0.0.0.0/0"}]
+    }
+}
+EOF
   # Configure CNI networking
-  scp -i ${SSHKEY} ${CA_FOLDR}/10-bridge.conf ${CA_FOLDR}/99-loopback.conf ${CA_FOLDR}/crio.service ubuntu@${WORKER_IP_PUB[$i]}:~/
-  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv 10-bridge.conf 99-loopback.conf /etc/cni/net.d/"
+  scp -i ${SSHKEY} ${CA_FOLDR}/10-bridge.conf.worker${i} ${CA_FOLDR}/99-loopback.conf ${CA_FOLDR}/crio.service ubuntu@${WORKER_IP_PUB[$i]}:~/
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv 10-bridge.conf.worker${i} 10-bridge.conf ; sudo mv 10-bridge.conf 99-loopback.conf /etc/cni/net.d/"
 
   # Configure the CRI-O Container Runtime
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv crio.conf seccomp.json /etc/crio/ && \
