@@ -35,10 +35,11 @@ mkdir -p ${FOLDR}
 workers() {
   echo "CONFIGURING WORKERS"
   #TODO: this does not work
-# ERROR on this: Error from server (Forbidden): User "system:kube-proxy" cannot list componentstatuses at the cluster scope. (get componentstatuses)
  # kubectl --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig get componentstatuses
+#kubectl get nodes --output=jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address} {.spec.podCIDR} {"\n"}{end}'
+# it does not get the pod cidr
 
- # This was moved outside the lopp to avoid duplicated work
+ # This was moved outside the loop to avoid duplicated work
 
 cat > ${CA_FOLDR}/99-loopback.conf <<EOF
 {
