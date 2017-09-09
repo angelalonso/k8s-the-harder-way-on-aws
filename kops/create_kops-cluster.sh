@@ -4,6 +4,7 @@ AWSPROF="test-k8s" # Profile in your ~/.aws config file
 STACK="af-k8s"
 DOMAIN="fodpanda.com"
 AZS="us-west-2a,us-west-2b,us-west-2c"
+MASTERAZS="us-west-2a,us-west-2b,us-west-2c"
 
 export AWS_PROFILE=${AWSPROF}
 export KOPS_STATE_STORE=s3://clusters.${STACK}.${DOMAIN}
@@ -14,9 +15,9 @@ create() {
   echo " - S3 bucket named clusters.${STACK}.${DOMAIN}"
 
   kops create cluster \
+    --master-count 1 \
     --node-count 3 \
     --zones ${AZS} \
-    --master-zones ${AZS} \
     --node-size t2.small \
     --master-size t2.small \
     kops.${STACK}.${DOMAIN}

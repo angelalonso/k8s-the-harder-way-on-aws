@@ -9,6 +9,7 @@ CA_FOLDR="${FOLDR}/ca"
 AWSPROF="test-k8s" # Profile in your ~/.aws config file
 
 STACK="af-k8s"
+ENTRY="hw.af-k8s.fodpanda.com"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
 CIDR_VPC="10.240.0.0/16"
 CIDR_SUBNET="10.240.0.0/24"
@@ -187,7 +188,7 @@ cfssl gencert \
 
 # Kubernetes API server certificate
 # Create the kubernetes server certificate
-K8S_PUBLIC_ADDRESS=${ELB_DNS}
+K8S_PUBLIC_ADDRESS=${ENTRY}
 cat > ${CA_FOLDR}/kubernetes-csr.json <<EOF
 {
   "CN": "kubernetes",

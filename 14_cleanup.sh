@@ -9,6 +9,7 @@ CA_FOLDR="${FOLDR}/ca"
 AWSPROF="test-k8s" # Profile in your ~/.aws config file
 
 STACK="af-k8s"
+ENTRY="hw.af-k8s.fodpanda.com"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
 CIDR="10.4.0.0/16"
 CIDR_MASTER="10.4.1.0/24"
@@ -50,6 +51,12 @@ delete_all() {
   aws --profile=${AWSPROF} ec2 delete-internet-gateway --internet-gateway-id ${IGW}
   aws --profile=${AWSPROF} ec2 delete-subnet --subnet-id ${SUBNET}
   aws --profile=${AWSPROF} ec2 delete-vpc --vpc-id ${VPCID}
+  for i in $(seq -w $NR_MASTERS); do
+    ssh-keygen -f "/home/aaf/.ssh/known_hosts" -R master$i
+  done
+  for i in $(seq -w $NR_WORKERS); do
+    ssh-keygen -f "/home/aaf/.ssh/known_hosts" -R worker$i
+  done
 }
 
 delete_all

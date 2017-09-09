@@ -9,8 +9,9 @@ CA_FOLDR="${FOLDR}/ca"
 AWSPROF="test-k8s" # Profile in your ~/.aws config file
 
 STACK="af-k8s"
+ENTRY="hw.af-k8s.fodpanda.com"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
-CIDR_VPC="10.240.0.0/16"
+CIDR_VPC="10.240.0.0/24"
 CIDR_SUBNET="10.240.0.0/24"
 CIDR_CLUSTER="10.200.0.0/16"
 #TODO: Check what this is really used for
@@ -107,7 +108,7 @@ aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key | jq -r '.K
 MASTERLIST=""
 for i in $(seq -w $NR_MASTERS); do
   # Provision and tag the master
-  MASTER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG} --subnet-id ${SUBNET} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
+  MASTER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG} --subnet-id ${SUBNET} --private-ip-address 10.240.0.1${i} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
   MASTERLIST="${MASTERLIST} ${MASTER_ID[$i]}"
   echo "MASTER_ID[$i]=\"${MASTER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${MASTER_ID[$i]} --tags Key=Name,Value=${STACK}-master$i
@@ -116,6 +117,8 @@ for i in $(seq -w $NR_MASTERS); do
   echo "MASTER_IP_INT[$i]=\"${MASTER_IP_INT[$i]}\"" >> ${CFG}
   MASTER_IP_PUB[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${MASTER_ID[$i]} | jq -r '.Reservations[].Instances[].PublicIpAddress')
   echo "MASTER_IP_PUB[$i]=\"${MASTER_IP_PUB[$i]}\"" >> ${CFG}
+  MASTER_DNS_INT[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${MASTER_ID[$i]} | jq -r '.Reservations[].Instances[].PrivateDnsName')
+  echo "MASTER_DNS_INT[$i]=\"${MASTER_DNS_INT[$i]}\"" >> ${CFG}
 done
 echo "MASTERLIST=\"${MASTERLIST}\"" >> ${CFG}
 # Add the controllers to the load Balancer
@@ -124,7 +127,7 @@ aws --profile=${AWSPROF} elb register-instances-with-load-balancer --load-balanc
 # 3x workers
 WORKERLIST=""
 for i in $(seq -w $NR_WORKERS); do
-  WORKER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG} --subnet-id ${SUBNET} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
+  WORKER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG} --subnet-id ${SUBNET} --private-ip-address 10.240.0.2${i} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
   WORKERLIST="${WORKERLIST} ${WORKER_ID[$i]}"
   echo "WORKER_ID[$i]=\"${WORKER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${WORKER_ID[$i]} --tags Key=Name,Value=${STACK}-worker$i
@@ -134,10 +137,17 @@ for i in $(seq -w $NR_WORKERS); do
   # Get its Public IP
   WORKER_IP_PUB[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${WORKER_ID[$i]} | jq -r '.Reservations[].Instances[].PublicIpAddress')
   echo "WORKER_IP_PUB[$i]=\"${WORKER_IP_PUB[$i]}\"" >> ${CFG}
+  WORKER_DNS_INT[$i]=$(aws --profile=${AWSPROF} ec2 describe-instances --instance-id ${WORKER_ID[$i]} | jq -r '.Reservations[].Instances[].PrivateDnsName')
+  echo "WORKER_DNS_INT[$i]=\"${WORKER_DNS_INT[$i]}\"" >> ${CFG}
 done
 echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
 
 
+}
+
+hosts() {
+  echo "add the following to your /etc/hosts file:"
+cat aux/config.cfg | grep "MASTER_IP_P\|WORKER_IP_P" |awk -F'=' '{print $2i" " $1}' | sed -s 's/"//g' | sed -s 's/\[//g' | sed -s 's/\]//g' | sed -s 's/\_IP_PUB//g' | tr '[:upper:]' '[:lower:]'
 }
 
 testing() {
@@ -146,4 +156,5 @@ testing() {
 }
 
 provisioning
+hosts
 #testing

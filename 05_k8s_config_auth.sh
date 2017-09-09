@@ -9,6 +9,7 @@ CA_FOLDR="${FOLDR}/ca"
 AWSPROF="test-k8s" # Profile in your ~/.aws config file
 
 STACK="af-k8s"
+ENTRY="hw.af-k8s.fodpanda.com"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
 CIDR_VPC="10.240.0.0/16"
 CIDR_SUBNET="10.240.0.0/24"
@@ -35,7 +36,7 @@ auth_config() {
 
 echo "CONFIGURING AUTH!"
 
-K8S_PUBLIC_ADDRESS=${ELB_DNS}
+K8S_PUBLIC_ADDRESS=${ENTRY}
 #kubelet Kubernetes Configuration File
 for i in $(seq -w $NR_WORKERS); do
   kubectl config set-cluster kubernetes-the-hard-way \
