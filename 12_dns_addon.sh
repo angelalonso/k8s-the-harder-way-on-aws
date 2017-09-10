@@ -11,7 +11,7 @@ AWSPROF="test-k8s" # Profile in your ~/.aws config file
 STACK="af-k8s"
 ENTRY="hw.af-k8s.fodpanda.com"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
-CIDR_VPC="10.240.0.0/16"
+CIDR_VPC="10.240.0.0/24"
 CIDR_SUBNET="10.240.0.0/24"
 CIDR_CLUSTER="10.200.0.0/16"
 #TODO: Check what this is really used for
@@ -47,23 +47,24 @@ dns_addon() {
 # Name:      kubernetes
 # Address 1: 10.32.0.1 kubernetes.default.svc.cluster.local
 
-  kubectl create -f https://storage.googleapis.com/kubernetes-the-hard-way/kube-dns.yaml
-  # https://kubernetes.io/docs/tasks/access-application-cluster/web-ui-dashboard/#accessing-the-dashboard-ui
-  #kubectl create -f https://rawgit.com/kubernetes/dashboard/master/src/deploy/kubernetes-dashboard.yaml
+  #kubectl create -f https://storage.googleapis.com/kubernetes-the-hard-way/kube-dns.yaml
+  kubectl create -f https://raw.githubusercontent.com/kelseyhightower/kubernetes-the-hard-way/master/deployments/kube-dns.yaml
   sleep 30
-  echo "Testing if it worked..."
-  kubectl get pods -l k8s-app=kube-dns -n kube-system
   echo "creating a busybox deployment"y
   kubectl run busybox --image=busybox --command -- sleep 3600
-  kubectl get pods -l run=busybox
 
+  # https://kubernetes.io/docs/tasks/access-application-cluster/web-ui-dashboard/#accessing-the-dashboard-ui
+  #kubectl create -f https://rawgit.com/kubernetes/dashboard/master/src/deploy/kubernetes-dashboard.yaml
+}
+
+testing() {
+  echo "Testing kube-dns is there"
+  kubectl get pods -l k8s-app=kube-dns -n kube-system
+  echo "Testing busybox"
+  kubectl get pods -l run=busybox
   POD_NAME=$(kubectl get pods -l run=busybox -o jsonpath="{.items[0].metadata.name}")
   kubectl exec -ti $POD_NAME -- nslookup kubernetes
 }
 
-testing() {
-  echo
-}
-
-dns_addon
-#testing
+#dns_addon
+testing
