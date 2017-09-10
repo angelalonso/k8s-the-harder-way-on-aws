@@ -35,9 +35,14 @@ mkdir -p ${FOLDR}
 dns_addon() {
   echo "Deploying Cluster DNS addon"
   #TODO: This does not work.
+  # TODO: /etc/hosts with <ip> worker$i needed
   # I get on the final step:
 #kubectl exec -ti $POD_NAME -- nslookup kubernetes
-#Error from server: error dialing backend: dial tcp: lookup worker2 on 10.240.0.2:53: no such host
+#Server:    10.32.0.10
+#Address 1: 10.32.0.10
+
+#nslookup: can't resolve 'kubernetes.default.svc.cluster.local'
+
 #
 # instead of
 # output
