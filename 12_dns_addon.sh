@@ -58,7 +58,7 @@ dns_addon() {
   echo "creating a busybox deployment"y
   kubectl run busybox --image=busybox --command -- sleep 3600
 
-  echo "Deploying dashboard"
+ # echo "Deploying dashboard"
   #TODO: kubectl proxy gives an error:
   # (solution 1 - increase instance size)
   # Not showing on 127.0.0.1:8001/ui
@@ -77,5 +77,5 @@ testing() {
   kubectl exec -ti $POD_NAME -- nslookup kubernetes
 }
 
-#dns_addon
+dns_addon
 testing
