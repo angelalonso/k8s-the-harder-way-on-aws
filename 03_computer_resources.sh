@@ -11,7 +11,7 @@ AWSPROF="test-k8s" # Profile in your ~/.aws config file
 STACK="af-k8s"
 ENTRY="hw.af-k8s.fodpanda.com"
 SSHKEY="$HOME/.ssh/$STACK-key.priv"
-CIDR_VPC="10.240.0.0/24"
+CIDR_VPC="10.240.0.0/16"
 CIDR_SUBNET="10.240.0.0/24"
 CIDR_CLUSTER="10.200.0.0/16"
 #TODO: Check what this is really used for
@@ -44,9 +44,16 @@ echo "VPCID=\"${VPCID}\"" >> ${CFG}
 # Tag it
 aws --profile=${AWSPROF} ec2 create-tags --resources ${VPCID} --tags Key=Name,Value=${STACK}-vpc
 # Enable DNS for the VPC
-aws --profile=${AWSPROF} ec2 modify-vpc-attribute --vpc-id ${VPCID} --enable-dns-support
-aws --profile=${AWSPROF} ec2 modify-vpc-attribute --vpc-id ${VPCID} --enable-dns-hostnames
-
+aws --profile=${AWSPROF} ec2 modify-vpc-attribute --vpc-id ${VPCID} --enable-dns-support '{"Value": true}'
+aws --profile=${AWSPROF} ec2 modify-vpc-attribute --vpc-id ${VPCID} --enable-dns-hostnames '{"Value": true}'
+# DHCP options
+DHCP_OPTION_SET_ID=$(aws ec2 --profile=${AWSPROF} create-dhcp-options \
+  --dhcp-configuration "Key=domain-name,Values=us-west-2.compute.internal" \
+    "Key=domain-name-servers,Values=AmazonProvidedDNS" | jq -r '.DhcpOptions.DhcpOptionsId')
+echo "DHCP_OPTION_SET_ID=\"${DHCP_OPTION_SET_ID}\"" >> ${CFG}
+aws --profile=${AWSPROF} ec2 create-tags --resources ${DHCP_OPTION_SET_ID} --tags Key=Name,Value=${STACK}-dhcp-opts
+aws --profile=${AWSPROF} ec2 associate-dhcp-options --dhcp-options-id ${DHCP_OPTION_SET_ID} --vpc-id ${VPCID}
+### CHECKED UNTIL HERE
 # Subnet
 SUBNET=$(aws --profile=${AWSPROF} ec2 create-subnet --vpc-id ${VPCID} --cidr-block ${CIDR_SUBNET} | jq -r '.Subnet.SubnetId')
 echo "SUBNET=\"${SUBNET}\"" >> ${CFG}

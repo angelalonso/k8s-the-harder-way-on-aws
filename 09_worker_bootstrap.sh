@@ -112,7 +112,7 @@ for i in $(seq -w $NR_WORKERS); do
     sudo mv conmon pause /usr/local/libexec/crio/"
 
 #TODO: Check where this really is used for
-  CIDR_POD="10.200.${i}.0/16"
+  CIDR_POD="10.200.${i}.0/24"
   cat > ${CA_FOLDR}/10-bridge.conf.worker${i} <<EOF
 {
     "cniVersion": "0.3.1",
@@ -185,7 +185,6 @@ EOF
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv crio.service kubelet.service kube-proxy.service /etc/systemd/system/ && \
     sudo systemctl daemon-reload && \
     sudo systemctl enable crio kubelet kube-proxy && \
-    sudo hostname worker${i} && \
     sudo systemctl start crio kubelet kube-proxy"
 done
 
