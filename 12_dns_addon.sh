@@ -77,5 +77,5 @@ testing() {
   kubectl exec -ti $POD_NAME -- nslookup kubernetes
 }
 
-dns_addon
+#dns_addon
 testing

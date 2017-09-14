@@ -188,17 +188,19 @@ EOF
     sudo systemctl start crio kubelet kube-proxy"
 done
 
+}
+
+
+testing() {
+  echo "TESTING"
 for i in $(seq -w $NR_MASTERS); do
   #TODO: ERROR: his command gets no resources
   ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "kubectl get nodes"
 
 done
-}
-
-
-testing() {
-  echo
   kubectl --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig get componentstatuses
+kubectl get nodes \
+  --output=jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address} {.spec.podCIDR} {"\n"}{end}'
 }
-workers
-#testing
+#workers
+testing

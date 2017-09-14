@@ -37,6 +37,7 @@ provisioning() {
 # Clean up the previous definitions:
 cp $CFG $CFG.prev 2>/dev/null
 echo > $CFG
+# TODO: add the vars above to CFG here
 
 # VPC
 VPCID=$(aws --profile=${AWSPROF} ec2 create-vpc --cidr-block ${CIDR_VPC} | jq -r '.Vpc.VpcId')
@@ -53,56 +54,55 @@ DHCP_OPTION_SET_ID=$(aws ec2 --profile=${AWSPROF} create-dhcp-options \
 echo "DHCP_OPTION_SET_ID=\"${DHCP_OPTION_SET_ID}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${DHCP_OPTION_SET_ID} --tags Key=Name,Value=${STACK}-dhcp-opts
 aws --profile=${AWSPROF} ec2 associate-dhcp-options --dhcp-options-id ${DHCP_OPTION_SET_ID} --vpc-id ${VPCID}
-### CHECKED UNTIL HERE
 # Subnet
 SUBNET=$(aws --profile=${AWSPROF} ec2 create-subnet --vpc-id ${VPCID} --cidr-block ${CIDR_SUBNET} | jq -r '.Subnet.SubnetId')
 echo "SUBNET=\"${SUBNET}\"" >> ${CFG}
 # Tag it
 aws --profile=${AWSPROF} ec2 create-tags --resources ${SUBNET} --tags Key=Name,Value=${STACK}-subnet
 
-# 3x Firewall rules
+IGW=$(aws --profile=${AWSPROF} ec2 create-internet-gateway | jq -r '.InternetGateway.InternetGatewayId')
+echo "IGW=\"${IGW}\"" >> ${CFG}
+aws --profile=${AWSPROF} ec2 create-tags --resources ${IGW} --tags Key=Name,Value=${STACK}-internet-gateway
+aws --profile=${AWSPROF} ec2 attach-internet-gateway --internet-gateway-id ${IGW} --vpc-id ${VPCID}
+
 ### Create and config Route Tables
 RTB=$(aws --profile=test-k8s ec2 create-route-table --vpc-id ${VPCID}  | jq -r '.RouteTable.RouteTableId')
 echo "RTB=\"${RTB}\"" >> ${CFG}
 # Tag it, associate it
 aws --profile=${AWSPROF} ec2 create-tags --resources ${RTB} --tags Key=Name,Value=${STACK}-route-table
 aws --profile=${AWSPROF} ec2 associate-route-table --route-table-id ${RTB} --subnet-id ${SUBNET}
+# Tell the Route Table to use the IGW to get to the world
+aws --profile=${AWSPROF} ec2 create-route --route-table-id ${RTB} --destination-cidr-block 0.0.0.0/0 --gateway-id ${IGW}
+
+# 3x Firewall rules
 # Create and config Security Groups and rules
 SG=$(aws --profile=${AWSPROF} ec2 create-security-group --vpc-id ${VPCID} --group-name ${STACK}-sg --description ${STACK}-security-group | jq -r '.GroupId')
 echo "SG=\"${SG}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${SG} --tags Key=Name,Value=${STACK}-sg
 
-# Open ports
-# TODO: investigate if this works or is even needed
-# The ELB is a dependency even before we start.
-# GCloud has an IP Range for LB health checks. AWS doesnt, so we create the LB already before the firewall rule
-# We need an IGW before creating the ELB
-# Create and attach IGW
-IGW=$(aws --profile=${AWSPROF} ec2 create-internet-gateway | jq -r '.InternetGateway.InternetGatewayId')
-echo "IGW=\"${IGW}\"" >> ${CFG}
-aws --profile=${AWSPROF} ec2 create-tags --resources ${IGW} --tags Key=Name,Value=${STACK}-internet-gateway
-aws --profile=${AWSPROF} ec2 attach-internet-gateway --internet-gateway-id ${IGW} --vpc-id ${VPCID}
-# Tell the Route Table to use the IGW to get to the world
-aws --profile=${AWSPROF} ec2 create-route --route-table-id ${RTB} --destination-cidr-block 0.0.0.0/0 --gateway-id ${IGW}
-# Create the main ELB for K8s
-ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET} | jq -r '.DNSName')
-ELB=$(aws --profile=${AWSPROF} elb describe-load-balancers | jq -r '[ .LoadBalancerDescriptions[] | select( .DNSName | contains("'${ELB_DNS}'")) ] | .[].LoadBalancerName' )
-echo "ELB=\"${ELB}\"" >> ${CFG}
-echo "ELB_DNS=\"${ELB_DNS}\"" >> ${CFG}
-aws --profile=${AWSPROF} elb apply-security-groups-to-load-balancer --load-balancer-name ${STACK}-elb --security-groups ${SG}
-aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK}-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
-
-# TODO: Is this needed for the ELB?
-#aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 8080 --protocol tcp --cidr ${CIDR_SUBNET}
 # Internal Communication across all protocols
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_SUBNET}
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_CLUSTER}
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --port 0-65535 --cidr ${CIDR_VPC}
+aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all
 # External SSH ICMP and HTTPS
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 22 --protocol tcp --cidr 0.0.0.0/0
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 6443 --protocol tcp --cidr 0.0.0.0/0
-aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port -1 --protocol icmp --cidr 0.0.0.0/0
-# Public IP address
-# 3x controllers
+## removed from original
+## aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port -1 --protocol icmp --cidr 0.0.0.0/0
+## aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_SUBNET}
+## aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_CLUSTER}
+
+# The ELB is a dependency even before we start.
+# Create the main ELB for K8s
+## removed from original
+## ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET} | jq -r '.DNSName')
+## aws --profile=${AWSPROF} elb apply-security-groups-to-load-balancer --load-balancer-name ${STACK}-elb --security-groups ${SG}
+ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET} --security-groups ${SG} | jq -r '.DNSName')
+ELB=$(aws --profile=${AWSPROF} elb describe-load-balancers | jq -r '[ .LoadBalancerDescriptions[] | select( .DNSName | contains("'${ELB_DNS}'")) ] | .[].LoadBalancerName' )
+echo "ELB=\"${ELB}\"" >> ${CFG}
+echo "ELB_DNS=\"${ELB_DNS}\"" >> ${CFG}
+# TODO: join Route 53 entry and ELB DNS
+aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK}-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
+
 ## Before we create machines we need a KEYPAIR
 if [ -f  ${SSHKEY} ]; then
   mv ${SSHKEY} ${SSHKEY}.old
@@ -116,6 +116,8 @@ MASTERLIST=""
 for i in $(seq -w $NR_MASTERS); do
   # Provision and tag the master
   MASTER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG} --subnet-id ${SUBNET} --private-ip-address 10.240.0.1${i} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
+  # As seen on https://github.com/kelseyhightower/kubernetes-the-hard-way/blob/1.4/docs/01-infrastructure-aws.md
+  aws --profile=${AWSPROF} ec2 modify-instance-attribute --instance-id ${MASTER_ID[$i]} --no-source-dest-check
   MASTERLIST="${MASTERLIST} ${MASTER_ID[$i]}"
   echo "MASTER_ID[$i]=\"${MASTER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${MASTER_ID[$i]} --tags Key=Name,Value=${STACK}-master$i
@@ -135,6 +137,8 @@ aws --profile=${AWSPROF} elb register-instances-with-load-balancer --load-balanc
 WORKERLIST=""
 for i in $(seq -w $NR_WORKERS); do
   WORKER_ID[$i]=$(aws --profile=${AWSPROF} ec2 run-instances --image-id ${AMI} --instance-type ${INSTANCE_TYPE} --key-name ${STACK}-key --security-group-ids ${SG} --subnet-id ${SUBNET} --private-ip-address 10.240.0.2${i} --associate-public-ip-address | jq -r '.Instances[].InstanceId')
+  # As seen on https://github.com/kelseyhightower/kubernetes-the-hard-way/blob/1.4/docs/01-infrastructure-aws.md
+  aws --profile=${AWSPROF} ec2 modify-instance-attribute --instance-id ${WORKER_ID[$i]} --no-source-dest-check
   WORKERLIST="${WORKERLIST} ${WORKER_ID[$i]}"
   echo "WORKER_ID[$i]=\"${WORKER_ID[$i]}\"" >> ${CFG}
   aws --profile=${AWSPROF} ec2 create-tags --resources ${WORKER_ID[$i]} --tags Key=Name,Value=${STACK}-worker$i
