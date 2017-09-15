@@ -1,37 +1,10 @@
 #!/usr/bin/env bash
 
 #VARS
-MYIP=$(curl ipinfo.io/ip)
-FOLDR="~/k8s-aws"
 FOLDR="/home/aaf/Software/Dev/k8s-the-harder-way-on-aws/aux"
 CFG="${FOLDR}/config.cfg"
-CA_FOLDR="${FOLDR}/ca"
-AWSPROF="test-k8s" # Profile in your ~/.aws config file
-
-STACK="af-k8s"
-ENTRY="hw.af-k8s.fodpanda.com"
-SSHKEY="$HOME/.ssh/$STACK-key.priv"
-CIDR_VPC="10.240.0.0/16"
-CIDR_SUBNET="10.240.0.0/24"
-CIDR_CLUSTER="10.200.0.0/16"
-#TODO: Check what this is really used for
-K8S_DNS="10.32.0.10"
-
-PORT_SSH="22"
-# TODO: are these correct?
-PORT_ETCD="2379"
-PORT_ETCDCTL="2380"
-
-AMI="ami-835b4efa"
-INSTANCE_TYPE="t2.small"
-
-NR_MASTERS=3
-NR_WORKERS=3
-
-mkdir -p ${FOLDR}
 
 . ${CFG}
-
 
 workers() {
   echo "CONFIGURING WORKERS"
@@ -202,5 +175,5 @@ done
 kubectl get nodes \
   --output=jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address} {.spec.podCIDR} {"\n"}{end}'
 }
-#workers
+workers
 testing

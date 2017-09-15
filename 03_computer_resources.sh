@@ -1,43 +1,48 @@
 #!/usr/bin/env bash
 
 #VARS
-MYIP=$(curl ipinfo.io/ip)
-FOLDR="~/k8s-aws"
+# Needed ones
 FOLDR="/home/aaf/Software/Dev/k8s-the-harder-way-on-aws/aux"
 CFG="${FOLDR}/config.cfg"
+# create from scratch, save previous just in case
+mkdir -p ${FOLDR}
+cp $CFG $CFG.prev 2>/dev/null
+#TODO: there is a problem if we run this several times...
+#echo > $CFG
+# Start defining and adding vars
+MYIP=$(curl ipinfo.io/ip)
+echo "MYIP=\"${MYIP}\"" >> ${CFG}
+echo "FOLDR=\"${FOLDR}\"" >> ${CFG}
 CA_FOLDR="${FOLDR}/ca"
-AWSPROF="test-k8s" # Profile in your ~/.aws config file
-
+echo "CA_FOLDR=\"${CA_FOLDR}\"" >> ${CFG}
+echo "AWSPROF=\"test-k8s\"" >> ${CFG}
 STACK="af-k8s"
-ENTRY="hw.af-k8s.fodpanda.com"
-SSHKEY="$HOME/.ssh/$STACK-key.priv"
-CIDR_VPC="10.240.0.0/16"
-CIDR_SUBNET="10.240.0.0/24"
-CIDR_CLUSTER="10.200.0.0/16"
+echo "STACK=\"${STACK}\"" >> ${CFG}
+echo "ENTRY=\"hw.af-k8s.fodpanda.com\"" >> ${CFG}
+SSHKEY="$HOME/.ssh/${STACK}-key.priv"
+echo "SSHKEY=\"${SSHKEY}\"" >> ${CFG}
+echo "CIDR_VPC=\"10.240.0.0/16\"" >> ${CFG}
+echo "CIDR_SUBNET=\"10.240.0.0/24\"" >> ${CFG}
+echo "CIDR_CLUSTER=\"10.200.0.0/16\"" >> ${CFG}
 #TODO: Check what this is really used for
 K8S_DNS="10.32.0.10"
+echo "K8S_DNS=\"${K8S_DNS}\"" >> ${CFG}
+echo "PORT_SSH=\"22\"" >> ${CFG}
+echo "PORT_ETCD=\"2379\"" >> ${CFG}
+echo "PORT_ETCDCTL=\"2380\"" >> ${CFG}
+echo "AMI=\"ami-835b4efa\"" >> ${CFG}
+echo "INSTANCE_TYPE=\"t2.small\"" >> ${CFG}
+echo "R53_ZONE=\"Z22J8RVEAKU7B7\"" >> ${CFG}
+echo "R53_ELBFILE=\"elb_route53.json\"" >> ${CFG}
+echo "NR_MASTERS=3" >> ${CFG}
+echo "NR_WORKERS=3" >> ${CFG}
 
-PORT_SSH="22"
-# TODO: are these correct?
-PORT_ETCD="2379"
-PORT_ETCDCTL="2380"
-
-AMI="ami-835b4efa"
-INSTANCE_TYPE="t2.small"
-
-NR_MASTERS=3
-NR_WORKERS=3
-
-mkdir -p ${FOLDR}
 
 . ${CFG}
 
 provisioning() {
 
 # Clean up the previous definitions:
-cp $CFG $CFG.prev 2>/dev/null
-echo > $CFG
-# TODO: add the vars above to CFG here
 
 # VPC
 VPCID=$(aws --profile=${AWSPROF} ec2 create-vpc --cidr-block ${CIDR_VPC} | jq -r '.Vpc.VpcId')
@@ -163,9 +168,18 @@ cat aux/config.cfg | grep "MASTER_IP_P\|WORKER_IP_P" |awk -F'=' '{print $2i" " $
 
 testing() {
   echo TESTING!
+  cat > ${R53_ELBFILE} <<EOF
+{ "Comment": "", "Changes": [{"Action": "UPSERT",
+"ResourceRecordSet": {"Name": "hw.af-k8s.fodpanda.com.","Type": "CNAME","TTL": 60,
+"ResourceRecords": [{"Value":
+EOF
+echo "\"${ELB_DNS}\"" >> ${R53_ELBFILE}
+echo "}]}}]}" >> ${R53_ELBFILE}
+
+aws --profile=${AWSPROF} route53 change-resource-record-sets --hosted-zone-id ${R53_ZONE} --change-batch file://${R53_ELBFILE}
 
 }
 
-provisioning
-hosts
-#testing
+#provisioning
+#hosts
+testing
