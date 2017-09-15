@@ -6,9 +6,13 @@ FOLDR="/home/aaf/Software/Dev/k8s-the-harder-way-on-aws/aux"
 CFG="${FOLDR}/config.cfg"
 # create from scratch, save previous just in case
 mkdir -p ${FOLDR}
-cp $CFG $CFG.prev 2>/dev/null
 #TODO: there is a problem if we run this several times...
-#echo > $CFG
+# So we load the previous/current values first
+# to at least have them, but it will require cleanup
+. ${CFG} 2>/dev/null
+
+cp $CFG $CFG.prev 2>/dev/null
+echo > $CFG
 # Start defining and adding vars
 MYIP=$(curl ipinfo.io/ip)
 echo "MYIP=\"${MYIP}\"" >> ${CFG}
@@ -105,7 +109,17 @@ ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name
 ELB=$(aws --profile=${AWSPROF} elb describe-load-balancers | jq -r '[ .LoadBalancerDescriptions[] | select( .DNSName | contains("'${ELB_DNS}'")) ] | .[].LoadBalancerName' )
 echo "ELB=\"${ELB}\"" >> ${CFG}
 echo "ELB_DNS=\"${ELB_DNS}\"" >> ${CFG}
-# TODO: join Route 53 entry and ELB DNS
+# change the DNS we use to access the ELB
+  cat > ${R53_ELBFILE} <<EOF
+{ "Comment": "", "Changes": [{"Action": "UPSERT",
+"ResourceRecordSet": {"Name": "hw.af-k8s.fodpanda.com.","Type": "CNAME","TTL": 60,
+"ResourceRecords": [{"Value":
+EOF
+echo "\"${ELB_DNS}\"" >> ${R53_ELBFILE}
+echo "}]}}]}" >> ${R53_ELBFILE}
+
+aws --profile=${AWSPROF} route53 change-resource-record-sets --hosted-zone-id ${R53_ZONE} --change-batch file://${R53_ELBFILE}
+
 aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK}-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
 
 ## Before we create machines we need a KEYPAIR
@@ -168,18 +182,9 @@ cat aux/config.cfg | grep "MASTER_IP_P\|WORKER_IP_P" |awk -F'=' '{print $2i" " $
 
 testing() {
   echo TESTING!
-  cat > ${R53_ELBFILE} <<EOF
-{ "Comment": "", "Changes": [{"Action": "UPSERT",
-"ResourceRecordSet": {"Name": "hw.af-k8s.fodpanda.com.","Type": "CNAME","TTL": 60,
-"ResourceRecords": [{"Value":
-EOF
-echo "\"${ELB_DNS}\"" >> ${R53_ELBFILE}
-echo "}]}}]}" >> ${R53_ELBFILE}
-
-aws --profile=${AWSPROF} route53 change-resource-record-sets --hosted-zone-id ${R53_ZONE} --change-batch file://${R53_ELBFILE}
 
 }
 
-#provisioning
-#hosts
+provisioning
+hosts
 testing
