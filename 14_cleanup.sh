@@ -9,6 +9,8 @@ CFG="${FOLDR}/config.cfg"
 # TODO: do this until all is removed
 # TODO: get rid of DHCP configs as well
 delete_all() {
+  echo "TRYING TO DELETE #######################################################"
+  echo "########################################################################"
   aws --profile=${AWSPROF} ec2 delete-key-pair --key-name ${STACK}-key
   # subnets
   # igw
@@ -19,6 +21,7 @@ delete_all() {
     aws --profile=${AWSPROF} ec2 terminate-instances --instance-ids ${WORKER_ID[$i]}
   done
   # TODO: wait until instances are gone
+  sleep 30
   aws --profile=${AWSPROF} elb delete-load-balancer --load-balancer-name ${ELB}
   aws --profile=${AWSPROF} ec2 delete-route-table --route-table-id ${RTB}
 
@@ -35,4 +38,10 @@ delete_all() {
   done
 }
 
+# This is lazy but it does the job...
+# TODO: check instead of repeating
+delete_all
+delete_all
+delete_all
+delete_all
 delete_all

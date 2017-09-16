@@ -18,9 +18,12 @@ dns_addon() {
 }
 
 testing() {
+  sleep 5
+  echo
   echo "Testing kube-dns is there"
   kubectl get pods -l k8s-app=kube-dns -n kube-system
   echo "Testing busybox"
+
   kubectl get pods -l run=busybox
   POD_NAME=$(kubectl get pods -l run=busybox -o jsonpath="{.items[0].metadata.name}")
   kubectl exec -ti $POD_NAME -- nslookup kubernetes

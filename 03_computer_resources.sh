@@ -10,8 +10,11 @@ mkdir -p ${FOLDR}
 # So we load the previous/current values first
 # to at least have them, but it will require cleanup
 . ${CFG} 2>/dev/null
-
 cp $CFG $CFG.prev 2>/dev/null
+
+# ATTENTION: comment this out and uncomment correct_config below if you run the script on an existing Stack:
+echo > $CFG
+
 # Start defining and adding vars
 MYIP=$(curl ipinfo.io/ip)
 echo "MYIP=\"${MYIP}\"" >> ${CFG}
@@ -194,12 +197,12 @@ done
 # Distribute it
 
 for i in $(seq -w $NR_MASTERS); do
-  scp -i ${SSHKEY} ${CA_FOLDR}/etchosts ubuntu@${MASTER_IP_PUB[$i]}:~/etchosts
+  scp -o StrictHostKeyChecking=no -i ${SSHKEY} ${CA_FOLDR}/etchosts ubuntu@${MASTER_IP_PUB[$i]}:~/etchosts
   ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo tee -a /etc/hosts < etchosts"
 done
 
 for i in $(seq -w $NR_WORKERS); do
-  scp -i ${SSHKEY} ${CA_FOLDR}/etchosts ubuntu@${WORKER_IP_PUB[$i]}:~/etchosts
+  scp -o StrictHostKeyChecking=no -i ${SSHKEY} ${CA_FOLDR}/etchosts ubuntu@${WORKER_IP_PUB[$i]}:~/etchosts
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo tee -a /etc/hosts < etchosts"
 done
 }
@@ -210,6 +213,7 @@ testing() {
 }
 
 provisioning
-correct_config
+# ATTENTION: uncomment this and comment out the "echo > $CONF" line at the top if you run the script on an existing Stack:
+#correct_config
 hosts
 #testing

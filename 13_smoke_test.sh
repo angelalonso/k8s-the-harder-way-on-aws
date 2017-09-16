@@ -17,14 +17,11 @@ smoketest() {
   echo "Deployments"
   echo "Deploying nginx"
   kubectl run nginx --image=nginx
+  sleep 5
   kubectl get pods -l run=nginx
 
   echo "Deploying dashboard... because you probably will like having it"
   kubectl create -f https://rawgit.com/kubernetes/dashboard/master/src/deploy/kubernetes-dashboard.yaml
-
-  echo "Checking logs"
-  POD_NAME=$(kubectl get pods -l run=nginx -o jsonpath="{.items[0].metadata.name}")
-  kubectl logs $POD_NAME
 
   echo "Checking exec"
   kubectl exec -ti $POD_NAME -- nginx -v
@@ -39,6 +36,11 @@ smoketest() {
   echo "curl --head http://127.0.0.1:8080"
   echo "   , and exit with ^C when you are done"
   echo
+  POD_NAME=$(kubectl get pods -l run=nginx -o jsonpath="{.items[0].metadata.name}")
+  echo " - Checking logs"
+  echo "   RUN:"
+  echo "kubectl logs $POD_NAME"
+
   # TODO: add the services smoke test (creating ELB and so on)
 
 }
