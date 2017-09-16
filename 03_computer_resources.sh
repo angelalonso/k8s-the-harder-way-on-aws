@@ -12,7 +12,6 @@ mkdir -p ${FOLDR}
 . ${CFG} 2>/dev/null
 
 cp $CFG $CFG.prev 2>/dev/null
-echo > $CFG
 # Start defining and adding vars
 MYIP=$(curl ipinfo.io/ip)
 echo "MYIP=\"${MYIP}\"" >> ${CFG}
@@ -176,10 +175,33 @@ echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
 
 }
 
+correct_config() {
+  cat $CFG | sort | uniq > $CFG.aux
+  mv $CFG.aux $CFG
+}
+
 hosts() {
   echo "add the following to your /etc/hosts file:"
-cat aux/config.cfg | grep "MASTER_IP_P\|WORKER_IP_P" |awk -F'=' '{print $2i" " $1}' | sed -s 's/"//g' | sed -s 's/\[//g' | sed -s 's/\]//g' | sed -s 's/\_IP_PUB//g' | tr '[:upper:]' '[:lower:]'
-# TODO: add to /etc/hosts the relevant ip, ip-10-20...and masterx
+  cat aux/config.cfg | grep "MASTER_IP_P\|WORKER_IP_P" |awk -F'=' '{print $2i" " $1}' | sed -s 's/"//g' | sed -s 's/\[//g' | sed -s 's/\]//g' | sed -s 's/\_IP_PUB//g' | tr '[:upper:]' '[:lower:]'
+# create the file
+echo > ${CA_FOLDR}/etchosts
+for i in $(seq -w $NR_MASTERS); do
+  echo "10.240.0.1$i ip-10-240-0-1$i master$i" >> ${CA_FOLDR}/etchosts
+done
+for i in $(seq -w $NR_WORKERS); do
+  echo "10.240.0.2$i ip-10-240-0-2$i worker$i" >> ${CA_FOLDR}/etchosts
+done
+# Distribute it
+
+for i in $(seq -w $NR_MASTERS); do
+  scp -i ${SSHKEY} ${CA_FOLDR}/etchosts ubuntu@${MASTER_IP_PUB[$i]}:~/etchosts
+  ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "sudo tee -a /etc/hosts < etchosts"
+done
+
+for i in $(seq -w $NR_WORKERS); do
+  scp -i ${SSHKEY} ${CA_FOLDR}/etchosts ubuntu@${WORKER_IP_PUB[$i]}:~/etchosts
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo tee -a /etc/hosts < etchosts"
+done
 }
 
 testing() {
@@ -188,5 +210,6 @@ testing() {
 }
 
 provisioning
+correct_config
 hosts
 #testing
