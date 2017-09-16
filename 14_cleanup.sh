@@ -6,6 +6,8 @@ CFG="${FOLDR}/config.cfg"
 
 . ${CFG}
 
+# TODO: do this until all is removed
+# TODO: get rid of DHCP configs as well
 delete_all() {
   aws --profile=${AWSPROF} ec2 delete-key-pair --key-name ${STACK}-key
   # subnets

@@ -103,6 +103,8 @@ for i in $(seq -w $NR_WORKERS); do
     }
 }
 EOF
+  #Manually change hostname
+  ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo hostname worker${i}"
   # Configure CNI networking
   scp -i ${SSHKEY} ${CA_FOLDR}/10-bridge.conf.worker${i} ${CA_FOLDR}/99-loopback.conf ${CA_FOLDR}/crio.service ubuntu@${WORKER_IP_PUB[$i]}:~/
   ssh -i ${SSHKEY} ubuntu@${WORKER_IP_PUB[$i]} "sudo mv 10-bridge.conf.worker${i} 10-bridge.conf ; sudo mv 10-bridge.conf 99-loopback.conf /etc/cni/net.d/"
@@ -171,9 +173,6 @@ for i in $(seq -w $NR_MASTERS); do
   ssh -i ${SSHKEY} ubuntu@${MASTER_IP_PUB[$i]} "kubectl get nodes"
 
 done
-  kubectl --kubeconfig=${CA_FOLDR}/kube-proxy.kubeconfig get componentstatuses
-kubectl get nodes \
-  --output=jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address} {.spec.podCIDR} {"\n"}{end}'
 }
 workers
 testing

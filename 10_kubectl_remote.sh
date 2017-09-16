@@ -23,8 +23,10 @@ kubectl_remote() {
 }
 
 testing() {
-  echo
+  kubectl get componentstatuses
+kubectl get nodes \
+  --output=jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address} {.spec.podCIDR} {"\n"}{end}'
 }
 
 kubectl_remote
-#testing
+testing

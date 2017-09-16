@@ -131,6 +131,7 @@ touch ${SSHKEY}
 chmod 600 ${SSHKEY}
 aws --profile=${AWSPROF} ec2 create-key-pair --key-name ${STACK}-key | jq -r '.KeyMaterial' >> ${SSHKEY}
 
+# 3x masters
 MASTERLIST=""
 for i in $(seq -w $NR_MASTERS); do
   # Provision and tag the master
@@ -178,6 +179,7 @@ echo "WORKERLIST=\"${WORKERLIST}\"" >> ${CFG}
 hosts() {
   echo "add the following to your /etc/hosts file:"
 cat aux/config.cfg | grep "MASTER_IP_P\|WORKER_IP_P" |awk -F'=' '{print $2i" " $1}' | sed -s 's/"//g' | sed -s 's/\[//g' | sed -s 's/\]//g' | sed -s 's/\_IP_PUB//g' | tr '[:upper:]' '[:lower:]'
+# TODO: add to /etc/hosts the relevant ip, ip-10-20...and masterx
 }
 
 testing() {
