@@ -2,6 +2,8 @@
 Based on https://github.com/rmenn/kubernetes-the-hard-way-aws, which is also based on
 https://github.com/kelseyhightower/kubernetes-the-hard-way but in AWS
 
+NOTE: THIS IS A WORK IN PROGRESS
+
 ## Prerequisites and Conventions
 - You have access to an AWS account. In my case on the us-west-2 region (cheapest, really)
 - You have  enough rights. In my case, that meant IAM user with admin right, and a key/secret setup on .aws/credentials
