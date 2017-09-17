@@ -4,18 +4,27 @@
 # Needed ones
 FOLDR="/home/aaf/Software/Dev/k8s-the-harder-way-on-aws/aux"
 CFG="${FOLDR}/config.cfg"
-# create from scratch, save previous just in case
+# create from scratch
 mkdir -p ${FOLDR}
-#TODO: there is a problem if we run this several times...
-# So we load the previous/current values first
-# to at least have them, but it will require cleanup
-. ${CFG} 2>/dev/null
-cp $CFG $CFG.prev 2>/dev/null
 
-# ATTENTION: comment this out and uncomment correct_config below if you run the script on an existing Stack:
-echo > $CFG
+echo "This will delete the previous config file"
+echo "Are you sure?"
+echo " - Y/y -> Delete the references to a previous stack"
+echo " - N/n -> Update the references instead and reuse them"
+read -r -p "Do you want to overwrite? [y/N] (default is yes)" response
+response=${response,,}    # tolower
+if [[ "$response" =~ ^(no|n)$ ]]
+then
+  OVERWRITE=false
+  # Load vars we saved in config
+  . ${CFG} 2>/dev/null
+else
+  OVERWRITE=true
+  cp $CFG $CFG.prev 2>/dev/null
+  echo > $CFG
+fi
 
-# Start defining and adding vars
+# Start defining and adding vars to the config file
 MYIP=$(curl ipinfo.io/ip)
 echo "MYIP=\"${MYIP}\"" >> ${CFG}
 echo "FOLDR=\"${FOLDR}\"" >> ${CFG}
@@ -30,27 +39,27 @@ echo "SSHKEY=\"${SSHKEY}\"" >> ${CFG}
 echo "CIDR_VPC=\"10.240.0.0/16\"" >> ${CFG}
 echo "CIDR_SUBNET=\"10.240.0.0/24\"" >> ${CFG}
 echo "CIDR_CLUSTER=\"10.200.0.0/16\"" >> ${CFG}
-#TODO: Check what this is really used for
 K8S_DNS="10.32.0.10"
 echo "K8S_DNS=\"${K8S_DNS}\"" >> ${CFG}
 echo "PORT_SSH=\"22\"" >> ${CFG}
 echo "PORT_ETCD=\"2379\"" >> ${CFG}
 echo "PORT_ETCDCTL=\"2380\"" >> ${CFG}
 echo "AMI=\"ami-835b4efa\"" >> ${CFG}
-echo "INSTANCE_TYPE=\"t2.small\"" >> ${CFG}
+echo "INSTANCE_TYPE=\"t2.micro\"" >> ${CFG}
+# This variable stores the Route53 zone ID where I created the CNAME for my ELB. Create your own, update this.
 echo "R53_ZONE=\"Z22J8RVEAKU7B7\"" >> ${CFG}
 echo "R53_ELBFILE=\"elb_route53.json\"" >> ${CFG}
+# Amount of master nodes you want, max tested to work is 7
 echo "NR_MASTERS=3" >> ${CFG}
+# Amount of worker nodes you want, max tested to work is 7
 echo "NR_WORKERS=3" >> ${CFG}
-
+# TODO: solve the "08: value too great for base" error to get more than 7 of the two above
 
 . ${CFG}
 
 provisioning() {
 
-# Clean up the previous definitions:
-
-# VPC
+# Create VPC, get its ID
 VPCID=$(aws --profile=${AWSPROF} ec2 create-vpc --cidr-block ${CIDR_VPC} | jq -r '.Vpc.VpcId')
 echo "VPCID=\"${VPCID}\"" >> ${CFG}
 # Tag it
@@ -58,19 +67,21 @@ aws --profile=${AWSPROF} ec2 create-tags --resources ${VPCID} --tags Key=Name,Va
 # Enable DNS for the VPC
 aws --profile=${AWSPROF} ec2 modify-vpc-attribute --vpc-id ${VPCID} --enable-dns-support '{"Value": true}'
 aws --profile=${AWSPROF} ec2 modify-vpc-attribute --vpc-id ${VPCID} --enable-dns-hostnames '{"Value": true}'
-# DHCP options
+
+# DHCP options, as seen on https://github.com/kelseyhightower/kubernetes-the-hard-way/blob/1.4/docs/01-infrastructure-aws.md
 DHCP_OPTION_SET_ID=$(aws ec2 --profile=${AWSPROF} create-dhcp-options \
   --dhcp-configuration "Key=domain-name,Values=us-west-2.compute.internal" \
     "Key=domain-name-servers,Values=AmazonProvidedDNS" | jq -r '.DhcpOptions.DhcpOptionsId')
 echo "DHCP_OPTION_SET_ID=\"${DHCP_OPTION_SET_ID}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${DHCP_OPTION_SET_ID} --tags Key=Name,Value=${STACK}-dhcp-opts
 aws --profile=${AWSPROF} ec2 associate-dhcp-options --dhcp-options-id ${DHCP_OPTION_SET_ID} --vpc-id ${VPCID}
+
 # Subnet
 SUBNET=$(aws --profile=${AWSPROF} ec2 create-subnet --vpc-id ${VPCID} --cidr-block ${CIDR_SUBNET} | jq -r '.Subnet.SubnetId')
 echo "SUBNET=\"${SUBNET}\"" >> ${CFG}
-# Tag it
 aws --profile=${AWSPROF} ec2 create-tags --resources ${SUBNET} --tags Key=Name,Value=${STACK}-subnet
 
+# Internet Gateway
 IGW=$(aws --profile=${AWSPROF} ec2 create-internet-gateway | jq -r '.InternetGateway.InternetGatewayId')
 echo "IGW=\"${IGW}\"" >> ${CFG}
 aws --profile=${AWSPROF} ec2 create-tags --resources ${IGW} --tags Key=Name,Value=${STACK}-internet-gateway
@@ -79,13 +90,12 @@ aws --profile=${AWSPROF} ec2 attach-internet-gateway --internet-gateway-id ${IGW
 ### Create and config Route Tables
 RTB=$(aws --profile=test-k8s ec2 create-route-table --vpc-id ${VPCID}  | jq -r '.RouteTable.RouteTableId')
 echo "RTB=\"${RTB}\"" >> ${CFG}
-# Tag it, associate it
 aws --profile=${AWSPROF} ec2 create-tags --resources ${RTB} --tags Key=Name,Value=${STACK}-route-table
 aws --profile=${AWSPROF} ec2 associate-route-table --route-table-id ${RTB} --subnet-id ${SUBNET}
 # Tell the Route Table to use the IGW to get to the world
 aws --profile=${AWSPROF} ec2 create-route --route-table-id ${RTB} --destination-cidr-block 0.0.0.0/0 --gateway-id ${IGW}
 
-# 3x Firewall rules
+# Firewall rules
 # Create and config Security Groups and rules
 SG=$(aws --profile=${AWSPROF} ec2 create-security-group --vpc-id ${VPCID} --group-name ${STACK}-sg --description ${STACK}-security-group | jq -r '.GroupId')
 echo "SG=\"${SG}\"" >> ${CFG}
@@ -97,21 +107,16 @@ aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} -
 # External SSH ICMP and HTTPS
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 22 --protocol tcp --cidr 0.0.0.0/0
 aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port 6443 --protocol tcp --cidr 0.0.0.0/0
-## removed from original
-## aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --port -1 --protocol icmp --cidr 0.0.0.0/0
-## aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_SUBNET}
-## aws --profile=${AWSPROF} ec2 authorize-security-group-ingress --group-id ${SG} --protocol all --cidr ${CIDR_CLUSTER}
 
 # The ELB is a dependency even before we start.
 # Create the main ELB for K8s
-## removed from original
-## ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET} | jq -r '.DNSName')
-## aws --profile=${AWSPROF} elb apply-security-groups-to-load-balancer --load-balancer-name ${STACK}-elb --security-groups ${SG}
 ELB_DNS=$(aws --profile=${AWSPROF} elb create-load-balancer --load-balancer-name ${STACK}-elb --listeners "Protocol=TCP,LoadBalancerPort=6443,InstanceProtocol=TCP,InstancePort=6443" --subnets ${SUBNET} --security-groups ${SG} | jq -r '.DNSName')
 ELB=$(aws --profile=${AWSPROF} elb describe-load-balancers | jq -r '[ .LoadBalancerDescriptions[] | select( .DNSName | contains("'${ELB_DNS}'")) ] | .[].LoadBalancerName' )
 echo "ELB=\"${ELB}\"" >> ${CFG}
 echo "ELB_DNS=\"${ELB_DNS}\"" >> ${CFG}
+
 # change the DNS we use to access the ELB
+# NOTE: hw.af-k8s.fodpanda.com is a CNAME within Route 53: Create your own and change this
   cat > ${R53_ELBFILE} <<EOF
 { "Comment": "", "Changes": [{"Action": "UPSERT",
 "ResourceRecordSet": {"Name": "hw.af-k8s.fodpanda.com.","Type": "CNAME","TTL": 60,
@@ -121,7 +126,6 @@ echo "\"${ELB_DNS}\"" >> ${R53_ELBFILE}
 echo "}]}}]}" >> ${R53_ELBFILE}
 
 aws --profile=${AWSPROF} route53 change-resource-record-sets --hosted-zone-id ${R53_ZONE} --change-batch file://${R53_ELBFILE}
-
 aws --profile=${AWSPROF} elb configure-health-check --load-balancer-name ${STACK}-elb --health-check Target=HTTP:8080/healthz,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
 
 ## Before we create machines we need a KEYPAIR
@@ -184,11 +188,13 @@ correct_config() {
 }
 
 hosts() {
+  # This is somehow needed in AWS: make sure all hosts know how to find each other by the name in their configs, meaning IP, but also AWS DNS and the name we give them on this config (e.g.: worker2)
   echo "add the following to your /etc/hosts file:"
   cat aux/config.cfg | grep "MASTER_IP_P\|WORKER_IP_P" |awk -F'=' '{print $2i" " $1}' | sed -s 's/"//g' | sed -s 's/\[//g' | sed -s 's/\]//g' | sed -s 's/\_IP_PUB//g' | tr '[:upper:]' '[:lower:]'
 # create the file
 echo > ${CA_FOLDR}/etchosts
 for i in $(seq -w $NR_MASTERS); do
+  # I know, 10.240.xx should not be hardcoded!
   echo "10.240.0.1$i ip-10-240-0-1$i master$i" >> ${CA_FOLDR}/etchosts
 done
 for i in $(seq -w $NR_WORKERS); do
@@ -207,13 +213,9 @@ for i in $(seq -w $NR_WORKERS); do
 done
 }
 
-testing() {
-  echo TESTING!
-
-}
 
 provisioning
-# ATTENTION: uncomment this and comment out the "echo > $CONF" line at the top if you run the script on an existing Stack:
-#correct_config
+if ! $OVERWRITE ; then
+  correct_config
+fi
 hosts
-#testing

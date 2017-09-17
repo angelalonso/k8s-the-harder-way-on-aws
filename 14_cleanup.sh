@@ -6,7 +6,6 @@ CFG="${FOLDR}/config.cfg"
 
 . ${CFG}
 
-# TODO: do this until all is removed
 # TODO: get rid of DHCP configs as well
 delete_all() {
   echo "TRYING TO DELETE #######################################################"
