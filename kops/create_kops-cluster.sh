@@ -6,9 +6,9 @@
 #SOURCE_ENV="./aws.conf"
 #[[ -f ${SOURCE_ENV} ]] && . ${SOURCE_ENV}
 
-export NAME="af-k8s.fodpanda.com"
 export STACK="af-k8s"
 export DOMAIN="fodpanda.com"
+export NAME="${STACK}.${DOMAIN}"
 export AWS_PROFILE="test-k8s"
 export KOPS_STATE_STORE=s3://clusters.${STACK}.${DOMAIN}
 #export KOPS_FEATURE_FLAGS="+UseLegacyELBName"
@@ -48,6 +48,7 @@ create() {
 kops create cluster \
     --name "${NAME}" \
     --cloud aws \
+    --ssh-public-key ${SSH_PUBLIC_KEY} \
     --kubernetes-version ${KUBERNETES_VERSION} \
     --cloud-labels "Environment=\"tftest\",Type=\"k8s\",Role=\"node\",Provisioner=\"kops\"" \
     --node-count ${NODE_COUNT} \
@@ -62,8 +63,7 @@ kops create cluster \
     --topology private \
     --network-cidr "${NETWORK_CIDR}" \
     --networking calico \
-    --bastion \
-    --ssh-public-key ${SSH_PUBLIC_KEY}
+    --bastion
 
     # needed?
     #--dns private \
@@ -72,7 +72,7 @@ kops create cluster \
 
    echo "NOTE:"
    echo "run the following instead to create your cluster:"
-   echo "export AWS_PROFILE=${AWS_PROFILE}; export KOPS_STATE_STORE=s3://clusters.${STACK}.${DOMAIN}; kops update cluster kops.${STACK}.${DOMAIN} --yes"
+   echo "export AWS_PROFILE=${AWS_PROFILE}; export KOPS_STATE_STORE=s3://clusters.${STACK}.${DOMAIN}; kops update cluster ${NAME} --yes"
 }
 
 create
