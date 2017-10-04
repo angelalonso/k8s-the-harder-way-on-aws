@@ -45,13 +45,27 @@ create_min() {
 
 info_before
 
-kops create cluster \
+#kops create cluster \
+kops update cluster \
     --name "${NAME}" \
     --cloud aws \
     --ssh-public-key ${SSH_PUBLIC_KEY} \
     --kubernetes-version ${KUBERNETES_VERSION} \
     --cloud-labels "Environment=\"tftest\",Type=\"k8s\",Role=\"node\",Provisioner=\"kops\"" \
     --zones "${ZONES}"
+
+#    --node-count ${NODE_COUNT} \
+#    --master-count ${MASTER_COUNT} \
+#    --master-zones "${ZONES}" \
+#    --dns-zone "${DNS_ZONE_PRIVATE_ID}" \
+#    --node-size "${NODE_SIZE}" \
+#    --node-count "${NODE_COUNT}" \
+#    --master-size "${MASTER_SIZE}" \
+#    --master-count "${MASTER_COUNT}" \
+#    --topology private \
+#    --network-cidr "${NETWORK_CIDR}" \
+#    --networking calico \
+#    --bastion
 
 info_after
 

@@ -2,9 +2,12 @@
 
 Goal is create a K8s cluster with the following:
 
-- Own key provided
-- Using a domain of mine
-- Private zone, bastion
+- Own key provided - This is needed at creation
+- Using a domain of mine - This is needed at creation
+- Private zone
+- Bastion
+- Scalable painlessly
+- Upgradeable painlessly
 
 
 ## Automagically
@@ -19,10 +22,14 @@ run ./delete_kops-cluster.sh
 ### Run the "bare minimum" cluster creation
 run ./create-min_kops-cluster.sh
 
-### Change to use your own domain
 ### Add a private zone
 ### Add a bastion
-### Change to use your key
+### Scale up worker nodes
+### Scale up master nodes
+### Scale down worker nodes
+### Scale down master nodes
+### Upgrade Kubernetes version
+
 
 ## Interesting related reads:
 https://icicimov.github.io/blog/virtualization/Kubernetes-Cluster-in-AWS-with-Kops/
