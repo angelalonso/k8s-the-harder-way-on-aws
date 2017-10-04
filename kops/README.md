@@ -17,6 +17,7 @@ run ./delete_kops-cluster.sh
 ## Manually
 
 ### Run the "bare minimum" cluster creation
+run ./create-min_kops-cluster.sh
 
 ### Change to use your own domain
 ### Add a private zone
