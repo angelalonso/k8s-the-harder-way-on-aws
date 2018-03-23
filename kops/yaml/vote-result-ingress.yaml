@@ -1,0 +1,21 @@
+# An Ingress with 2 hosts
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: vote-result
+spec:
+  rules:
+  - host: voting.afonseca-k8s.fodpanda.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: voting-app
+          servicePort: 80
+  - host: result.afonseca-k8s.fodpanda.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: result-app
+          servicePort: 80

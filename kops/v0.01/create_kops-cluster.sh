@@ -23,7 +23,7 @@ export DNS_ZONE_PRIVATE_ID="Z22J8RVEAKU7B7"
 export NODE_SIZE="t2.micro"
 export NODE_COUNT=2
 export MASTER_SIZE="t2.small"
-export MASTER_COUNT=2
+export MASTER_COUNT=3
 export KUBERNETES_VERSION="1.7.4"
 
 
@@ -41,34 +41,43 @@ info_after() {
    echo "export AWS_PROFILE=${AWS_PROFILE}; export KOPS_STATE_STORE=s3://clusters.${STACK}.${DOMAIN}; kops update cluster ${NAME} --yes"
 }
 
-create_min() {
+create() {
 
 info_before
 
-#kops create cluster \
-kops update cluster \
+  # TODO:
+  #ERRORS:
+#error determining default DNS zone: No matching hosted zones found for ".af-k8s.internal"; please create one (e.g. "af-k8s.internal") first
+#./create_kops-cluster.sh: line 50: --dns: command not found
+#./create_kops-cluster.sh: line 58: --ssh-public-key: command not found
+
+kops create cluster \
     --name "${NAME}" \
     --cloud aws \
     --ssh-public-key ${SSH_PUBLIC_KEY} \
     --kubernetes-version ${KUBERNETES_VERSION} \
     --cloud-labels "Environment=\"tftest\",Type=\"k8s\",Role=\"node\",Provisioner=\"kops\"" \
-    --zones "${ZONES}"
+    --node-count ${NODE_COUNT} \
+    --master-count ${MASTER_COUNT} \
+    --zones "${ZONES}" \
+    --master-zones "${ZONES}" \
+    --dns-zone "${DNS_ZONE_PRIVATE_ID}" \
+    --node-size "${NODE_SIZE}" \
+    --node-count "${NODE_COUNT}" \
+    --master-size "${MASTER_SIZE}" \
+    --master-count "${MASTER_COUNT}" \
+    --topology private \
+    --network-cidr "${NETWORK_CIDR}" \
+    --networking calico \
+    --bastion
 
-#    --node-count ${NODE_COUNT} \
-#    --master-count ${MASTER_COUNT} \
-#    --master-zones "${ZONES}" \
-#    --dns-zone "${DNS_ZONE_PRIVATE_ID}" \
-#    --node-size "${NODE_SIZE}" \
-#    --node-count "${NODE_COUNT}" \
-#    --master-size "${MASTER_SIZE}" \
-#    --master-count "${MASTER_COUNT}" \
-#    --topology private \
-#    --network-cidr "${NETWORK_CIDR}" \
-#    --networking calico \
-#    --bastion
+    # needed?
+    #--dns private \
+# needed if existing vpc
+   # --vpc "${VPC_ID}" \
 
 info_after
 
 }
 
-create_min
+create

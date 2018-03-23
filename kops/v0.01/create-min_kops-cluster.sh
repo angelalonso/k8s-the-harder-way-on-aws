@@ -41,43 +41,34 @@ info_after() {
    echo "export AWS_PROFILE=${AWS_PROFILE}; export KOPS_STATE_STORE=s3://clusters.${STACK}.${DOMAIN}; kops update cluster ${NAME} --yes"
 }
 
-create() {
+create_min() {
 
 info_before
 
-  # TODO:
-  #ERRORS:
-#error determining default DNS zone: No matching hosted zones found for ".af-k8s.internal"; please create one (e.g. "af-k8s.internal") first
-#./create_kops-cluster.sh: line 50: --dns: command not found
-#./create_kops-cluster.sh: line 58: --ssh-public-key: command not found
-
 kops create cluster \
+#kops update cluster \
     --name "${NAME}" \
     --cloud aws \
     --ssh-public-key ${SSH_PUBLIC_KEY} \
     --kubernetes-version ${KUBERNETES_VERSION} \
     --cloud-labels "Environment=\"tftest\",Type=\"k8s\",Role=\"node\",Provisioner=\"kops\"" \
-    --node-count ${NODE_COUNT} \
-    --master-count ${MASTER_COUNT} \
-    --zones "${ZONES}" \
-    --master-zones "${ZONES}" \
-    --dns-zone "${DNS_ZONE_PRIVATE_ID}" \
-    --node-size "${NODE_SIZE}" \
-    --node-count "${NODE_COUNT}" \
-    --master-size "${MASTER_SIZE}" \
-    --master-count "${MASTER_COUNT}" \
-    --topology private \
-    --network-cidr "${NETWORK_CIDR}" \
-    --networking calico \
-    --bastion
+    --zones "${ZONES}"
 
-    # needed?
-    #--dns private \
-# needed if existing vpc
-   # --vpc "${VPC_ID}" \
+#    --node-count ${NODE_COUNT} \
+#    --master-count ${MASTER_COUNT} \
+#    --master-zones "${ZONES}" \
+#    --topology private \
+#    --dns-zone "${DNS_ZONE_PRIVATE_ID}" \
+#    --node-size "${NODE_SIZE}" \
+#    --node-count "${NODE_COUNT}" \
+#    --master-size "${MASTER_SIZE}" \
+#    --master-count "${MASTER_COUNT}" \
+#    --network-cidr "${NETWORK_CIDR}" \
+#    --networking calico \
+#    --bastion
 
 info_after
 
 }
 
-create
+create_min
